@@ -42,8 +42,27 @@ extern "C" {
 #define BSP_LCD_COLOR_SPACE (ESP_LCD_COLOR_SPACE_RGB)
 
 /* LCD display definition 720x1280 */
+/* ===== LOCAL PATCH (retro-go-tab5) =====
+ * Tab5 面板原生扫描是 720x1280（竖屏）。上游 BSP 只提供"竖屏 FB + LVGL 软件旋转"
+ * （bsp_display_start() 里写死 sw_rotate = true），而模拟器/retro-go 需要 1280x720
+ * 横向 FB —— 每帧软件旋转 92 万像素对 GBA 帧率不划算，所以在 DPI 时序层面切成横向
+ * （像素总数不变：720*1280 == 1280*720），再由驱动发 MADCTL 的 MV 位让面板把横向
+ * 像素流映射到玻璃上。置 0 即完全回到上游原状。
+ * 触摸 IC 的坐标系仍是竖屏原生，故 bsp_touch_new() 里单独写死 720/1280（见该处注释）。
+ */
+#ifndef BSP_LCD_LANDSCAPE
+#define BSP_LCD_LANDSCAPE 0   /* 实测：把 DPI 流切成横向(1280x720)+MADCTL MV 会让 ST7123 黑屏(背光亮无画面)。
+                               * 两家官方代码(M5 BSP / M5GFX)都用 720x1280 竖屏原生时序 + 上层旋转，故跟随。
+                               * 旋转改到我们的显示层做（P3 用 PPA 硬件 SRM，见 PPA_SRM_ROTATION_ANGLE_90）。 */
+#endif
+
+#if BSP_LCD_LANDSCAPE
+#define BSP_LCD_H_RES (1280)
+#define BSP_LCD_V_RES (720)
+#else
 #define BSP_LCD_H_RES (720)
 #define BSP_LCD_V_RES (1280)
+#endif
 
 #define BSP_LCD_MIPI_DSI_LCD_HSYNC (10)
 #define BSP_LCD_MIPI_DSI_LCD_HBP   (40)

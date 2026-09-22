@@ -1383,8 +1383,8 @@ esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* con
         .num_fbs            = 1,
         .video_timing =
             {
-                .h_size            = 720,
-                .v_size            = 1280,
+                .h_size            = BSP_LCD_H_RES,   /* LOCAL PATCH: 横向 */
+                .v_size            = BSP_LCD_V_RES,   /* LOCAL PATCH: 横向 */
                 .hsync_pulse_width = 2,
                 .hsync_back_porch  = 40,
                 .hsync_front_porch = 40,
@@ -1437,7 +1437,7 @@ esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* con
     ret_handles->panel        = disp_panel;
     ret_handles->control      = NULL;
 
-    ESP_LOGI(TAG, "ST7123 Display initialized with resolution %dx%d", 720, 1280);
+    ESP_LOGI(TAG, "ST7123 Display initialized with resolution %dx%d", BSP_LCD_H_RES, BSP_LCD_V_RES);
 
     return ret;
 
@@ -1461,8 +1461,8 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t* config, esp_lcd_touch_handle_t
 
     /* Initialize touch */
     const esp_lcd_touch_config_t tp_cfg = {
-        .x_max        = BSP_LCD_H_RES,
-        .y_max        = BSP_LCD_V_RES,
+        .x_max        = 720,   /* LOCAL PATCH: 触摸 IC 自身是竖屏原生 720x1280，勿改 */
+        .y_max        = 1280,  /* LOCAL PATCH: 同上 */
         .rst_gpio_num = -1,  // BSP_LCD_TOUCH_RST, // NC
         .int_gpio_num = 23,  // BSP_LCD_TOUCH_INT,
         .levels =
@@ -1634,8 +1634,8 @@ static lv_indev_t* bsp_display_indev_init_to_st7123(lv_display_t* disp)
     }
 
     const esp_lcd_touch_config_t tp_cfg = {
-        .x_max        = BSP_LCD_H_RES,
-        .y_max        = BSP_LCD_V_RES,
+        .x_max        = 720,   /* LOCAL PATCH: 触摸 IC 自身是竖屏原生 720x1280，勿改 */
+        .y_max        = 1280,  /* LOCAL PATCH: 同上 */
         .rst_gpio_num = -1,  // BSP_LCD_TOUCH_RST, // NC
         .int_gpio_num = 23,  // BSP_LCD_TOUCH_INT,
         .levels =
