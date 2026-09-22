@@ -1,7 +1,7 @@
 set(COMPONENT_SRCDIRS ". drivers/audio fonts libs/netplay libs/lodepng")
 set(COMPONENT_ADD_INCLUDEDIRS ". libs/netplay libs/lodepng")
 if((IDF_VERSION_MAJOR EQUAL 5) AND (IDF_VERSION_MINOR GREATER 2)) # esp-idf 5.3+
-    set(COMPONENT_REQUIRES "spi_flash fatfs app_update json nvs_flash esp_adc esp_timer esp_psram esp_wifi esp_http_client esp_driver_ledc driver")
+    set(COMPONENT_REQUIRES "spi_flash fatfs app_update json nvs_flash esp_adc esp_timer esp_psram esp_wifi esp_http_client esp_driver_ledc driver esp_lcd m5stack_tab5")
 elseif(IDF_VERSION_MAJOR EQUAL 5) # esp-idf 5.0 - 5.2
     set(COMPONENT_REQUIRES "spi_flash fatfs app_update json nvs_flash esp_adc esp_timer esp_psram esp_wifi esp_http_client")
 else() # esp-idf 4.1 - 4.4
@@ -47,6 +47,9 @@ set(RG_BUILD_INFO "${RG_BUILD_TARGET}-${RG_BUILD_RELEASE} ${PROJECT_VER} SDK:${I
 string(TIMESTAMP RG_BUILD_TIME "%s")
 
 component_compile_options(-D${RG_BUILD_TARGET}=1)
+# Tab5 BSP 的 umbrella 头（bsp/m5stack_tab5.h）默认会 #include "lvgl.h"，而 retro-go 不编 LVGL。
+# 该开关在 BSP 里是 PRIVATE 定义（不会传给使用方），所以使用方必须自己加一份。
+component_compile_options(-DBSP_CONFIG_NO_GRAPHIC_LIB=1)
 component_compile_options(-DRG_PROJECT_APP="${RG_PROJECT_APP}")
 component_compile_options(-DRG_BUILD_INFO="${RG_BUILD_INFO}")
 component_compile_options(-DRG_BUILD_TIME=${RG_BUILD_TIME})

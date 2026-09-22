@@ -34,6 +34,8 @@
 #include "targets/crokpocket/config.h"
 #elif defined(RG_TARGET_ESP32_P4)
 #include "targets/esp32-p4/config.h"
+#elif defined(RG_TARGET_TAB5)
+#include "targets/tab5/config.h"
 #else
 #warning "No target defined. Defaulting to ODROID-GO."
 #include "targets/odroid-go/config.h"
