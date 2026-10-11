@@ -1245,6 +1245,21 @@ void rg_input_deinit(void)
     RG_LOGI("Input terminated.\n");
 }
 
+/* ── 测量钩子：合成 A 键（默认关）─────────────────────────────
+ * 用途：给「帧率 A/B」一个**可复现的负载源**。用户定义的路径：启动器里按 A 进游戏，
+ * 游戏内 A = 跳 ⇒ 每 RG_TEST_AUTOPRESS_A_MS 合成一次（脉宽 PULSE_MS），于是"一直跳"
+ * 这个负载不需要人在旁边按。默认 0 ⇒ 对 Tab5 与正常构建零影响。
+ * 只在开机 DELAY_MS 之后才开始（启动器早期有"幽灵输入"历史，别掺进去）。 */
+#ifndef RG_TEST_AUTOPRESS_A_MS
+#define RG_TEST_AUTOPRESS_A_MS 0
+#endif
+#ifndef RG_TEST_AUTOPRESS_PULSE_MS
+#define RG_TEST_AUTOPRESS_PULSE_MS 120
+#endif
+#ifndef RG_TEST_AUTOPRESS_DELAY_MS
+#define RG_TEST_AUTOPRESS_DELAY_MS 12000
+#endif
+
 uint32_t rg_input_read_gamepad(void)
 {
 #ifdef RG_TARGET_SDL2
@@ -1259,6 +1274,27 @@ uint32_t rg_input_read_gamepad(void)
         {
             if (event.type == SDL_QUIT)
                 exit(0);
+        }
+    }
+#endif
+#if RG_TEST_AUTOPRESS_A_MS > 0
+    {
+        /* 合成 A：不需要"按下—释放"硬件事件，直接 OR 进返回的位掩码 */
+        static int64_t ap_t0 = 0;
+        const int64_t ap_now = rg_system_timer();          /* 微秒 */
+        if (ap_t0 == 0) ap_t0 = ap_now;
+        const int64_t el_ms = (ap_now - ap_t0) / 1000;
+        if (el_ms >= RG_TEST_AUTOPRESS_DELAY_MS &&
+            (el_ms % RG_TEST_AUTOPRESS_A_MS) < RG_TEST_AUTOPRESS_PULSE_MS)
+        {
+            static int64_t ap_last_log = -100000;
+            if (el_ms - ap_last_log > 10000)               /* 每 10s 说一次，便于确认它真的在按 */
+            {
+                ap_last_log = el_ms;
+                RG_LOGW("autopress: 合成 A 键中（每 %dms 一次，脉宽 %dms）\n",
+                        (int)RG_TEST_AUTOPRESS_A_MS, (int)RG_TEST_AUTOPRESS_PULSE_MS);
+            }
+            return gamepad_state | RG_KEY_A;
         }
     }
 #endif

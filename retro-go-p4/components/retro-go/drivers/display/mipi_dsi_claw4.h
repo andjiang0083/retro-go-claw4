@@ -751,8 +751,8 @@ static void lcd_init(void)
         RG_LOGW("claw4-testboot: 任务已起，12s 后自动进游戏\n");
     }
 #endif
-    RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d NUM_FBS=%d AUTOBOOT=%d\n",
-            (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST, dpi_cfg.num_fbs, (int)CLAW4_TEST_AUTOBOOT);
+    RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d NUM_FBS=%d AUTOBOOT=%d AUTOPRESS=%d\n",
+            (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST, dpi_cfg.num_fbs, (int)CLAW4_TEST_AUTOBOOT, (int)RG_TEST_AUTOPRESS_A_MS);
     RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
             CLAW4_PHYS_W, CLAW4_PHYS_H, CLAW4_DSI_LANES, CLAW4_DSI_LANE_MBPS,
             CLAW4_DPI_CLK_MHZ, (void *)claw4_fb);

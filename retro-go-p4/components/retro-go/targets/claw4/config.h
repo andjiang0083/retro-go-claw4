@@ -155,6 +155,10 @@
 /* P2 触摸虚拟手柄总开关：P1 显示验证阶段曾置 0（避免触摸初始化问题干扰显示判定）；
  * P2 打开 —— 触摸初始化见 rg_input.c 的 claw4 分支（GT911 @0x5D，INT GPIO33）。 */
 #define RG_ENABLE_TOUCH_GAMEPAD 1
+/* 测量用：合成 A 键（2s 一次）。用户定义的负载路径：launcher 里按 A 进游戏 ⇒ 游戏内 A=跳。
+ * ★ 测量构建专用；测完必须回 0（"测量开关不许过夜"，见 CLAW4-P3-FPS.md）。默认 0。 */
+#define RG_TEST_AUTOPRESS_A_MS 0
+
 
 /* ── 开机 recovery 组合键：**关掉**（0 = 永不触发）─────────────────────────
  * components/retro-go/config.h:110 的默认值是 **RG_KEY_ANY**（任意一个键）：开机早期那 5 次
