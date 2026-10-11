@@ -119,7 +119,9 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 1   /* A/B：PPA 硬件做 565→888（1:1 不插值）*/
+#define CLAW4_PPA_CONVERT 0   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
+                                     * 重新启用前必须先按 skill 铁律改成「非阻塞 + 回调 + xSemaphoreTake(timeout)，超时永久停用并落回 CPU」。
+                                     * 颜色映射也仍未定论（自检曾因采样到纯黑块给出假 bad=0）。 */
 #endif
 #ifndef CLAW4_PPA_SCALE_TEST
 #define CLAW4_PPA_SCALE_TEST 0   /* 测完改回 0 */
