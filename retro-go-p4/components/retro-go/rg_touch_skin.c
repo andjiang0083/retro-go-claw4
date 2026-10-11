@@ -64,12 +64,20 @@
    565 量化后"分区填充 vs 面板底"的 G 通道差都做到 ≥8 级（≈12% 亮度），这是真机低亮度下
    还能看见的下限 —— 原来的 1~3 级（3~5%）在 PC 满亮度图上看得见、真机上就是纯黑。
    D 套的分区线/分界线/铭牌线用 **每机型点缀色**（GBA 靛蓝 / GB 绿 / NES 红），随核心自动变。 */
+    /* E 套「素面板」（2026-10-11 用户真机反馈"皮肤影响了观感"后新增）：
+     *   **面板上不画任何装饰** —— 分区框（cluster_fill/line）、铭牌底板（badge_fill）全 NONE，
+     *   凹槽/分界线本就已取消（见 rg_touch_skin.c 的 ② ③ 说明）⇒ 整条控制区只剩底色 + 按键。
+     *   按键的配色/形状/尺寸**与 D 套逐字段相同**（fill 45 / label 80 / outline 3 / radius 18），
+     *   所以这一套只改"面板观感"，不动机手感与按键表情。
+     *   badge_text 用面板底色（= 看不见）：badge_text 没有 NONE 分支（只有 ACCENT），
+     *   传 NONE 会被 q565() 当成垃圾色，而铭牌文字是**无条件绘制**的 ⇒ 用底色罩掉最稳。 */
 #define RG_TOUCH_SKINS { \
     /* id  名字(ASCII)            短名       面板底   分区填充  分区线    分隔线    线粗 铭牌底   铭牌线   铭牌字    模式 描边 圆角% 填充% 标签%  标签覆盖    边框α 填充α 标签α 用机型点缀色 */ \
     {"A", "Deep Grey + Amber",  "Amber",   0x14171C, 0x2A3540, 0x8A6420, 0x9A7028, 2, 0x2A3540, 0x8A6420, 0xE8A22C, 0, 3, 18, 42, 72, RG_TOUCH_SKIN_NONE,   230, 128, 255, 0}, \
     {"B", "Minimal Outline",   "Outline", 0x0E1013, RG_TOUCH_SKIN_NONE, 0x505C6A, 0x3A4552, 1, RG_TOUCH_SKIN_NONE, 0x505C6A, 0x9AA3B0, 1, 3, 18,  0, 55, RG_TOUCH_SKIN_NONE,   230,   0, 255, 0}, \
     {"C", "Amber Retro",       "Retro",   0x17110A, 0x34281A, 0x8A6420, 0xA87A28, 2, 0x34281A, 0x8A6420, 0xFFC96B, 0, 3, 18, 30, 85, 0xFFD98A,             230, 128, 255, 0}, \
     {"D", "Console Colors",    "Console", 0x161B26, 0x2A3540, RG_TOUCH_SKIN_ACCENT, RG_TOUCH_SKIN_ACCENT, 2, 0x2A3540, RG_TOUCH_SKIN_ACCENT, RG_TOUCH_SKIN_ACCENT, 0, 3, 18, 45, 80, RG_TOUCH_SKIN_NONE, 230, 128, 255, 1}, \
+    {"E", "Flat Panel",        "Flat",    0x0E1013, RG_TOUCH_SKIN_NONE, RG_TOUCH_SKIN_NONE, RG_TOUCH_SKIN_NONE, 0, RG_TOUCH_SKIN_NONE, RG_TOUCH_SKIN_NONE, 0x0E1013, 0, 3, 18, 45, 80, RG_TOUCH_SKIN_NONE, 230, 128, 255, 1}, \
 }
 
 /* 每套皮肤的每键配色（槽位序见 rg_touch_skin.h 的 rg_skin_slot_t）：
@@ -78,6 +86,7 @@
     {0x8B94A2, 0x8B94A2, 0x8B94A2, 0x8B94A2, 0xC4574B, 0xC4A63C, 0x4C74B4, 0x5A8F62, 0x99A3B0, 0x99A3B0, 0x6D7684, 0x6D7684, 0xE8A22C, 0xE8A22C}, \
     {0x7C8592, 0x7C8592, 0x7C8592, 0x7C8592, 0xA8AFBA, 0xA8AFBA, 0xA8AFBA, 0xA8AFBA, 0x7C8592, 0x7C8592, 0x7C8592, 0x7C8592, 0xD08A22, 0xD08A22}, \
     {0xB98A45, 0xB98A45, 0xB98A45, 0xB98A45, 0xD9614F, 0xD9B24A, 0x6E86C4, 0x86A85E, 0xA98F63, 0xA98F63, 0x8A7350, 0x8A7350, 0xFFB84D, 0xFFB84D}, \
+    {0x8B94A2, 0x8B94A2, 0x8B94A2, 0x8B94A2, 0xD24636, 0xE0C03A, 0x3D7CD6, 0x4FA65C, 0x99A3B0, 0x99A3B0, 0x6D7684, 0x6D7684, RG_TOUCH_SKIN_ACCENT, RG_TOUCH_SKIN_ACCENT}, \
     {0x8B94A2, 0x8B94A2, 0x8B94A2, 0x8B94A2, 0xD24636, 0xE0C03A, 0x3D7CD6, 0x4FA65C, 0x99A3B0, 0x99A3B0, 0x6D7684, 0x6D7684, RG_TOUCH_SKIN_ACCENT, RG_TOUCH_SKIN_ACCENT}, \
 }
 

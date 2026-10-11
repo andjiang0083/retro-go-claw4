@@ -25,8 +25,10 @@
  * 免得"调用留着、声明被编掉"（2026-10-03 SDL2 宿主构建就是这么坏的）。 */
 #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
 
-#define RG_TOUCH_SKIN_COUNT 4
-#define RG_TOUCH_SKIN_DEFAULT 3   /* 默认皮肤：D 套「主机配色点缀」（用户选定） */
+#define RG_TOUCH_SKIN_COUNT 5
+#ifndef RG_TOUCH_SKIN_DEFAULT
+#define RG_TOUCH_SKIN_DEFAULT 3   /* 默认皮肤：D 套「主机配色点缀」（用户选定；Tab5 用） */
+#endif
 
 /* 皮肤槽位：与键位解耦的固定序号（皮肤表按这个序存颜色）。
  * 单独定义的原因：皮肤要覆盖"某机型可能没有的键"（GB 没有 L/R、NES 没有 X/Y），
