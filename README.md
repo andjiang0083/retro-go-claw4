@@ -1,5 +1,28 @@
 # retro-go Tab5 —— Tab5 上首个满帧 GBA 模拟器（一台机器 11 个机种）
 
+> ### 📟 本分支 `claw4` 是 **Metalio Claw4** 的移植线，不是 M5Stack Tab5
+>
+> 本分支把同一棵 retro-go 树移植到 **Metalio Claw4（ESP32-P4 · 720×720 方屏）**；Tab5 的 target 一行未动。
+> 下面的 Tab5 说明只作上游参考 —— Claw4 的移植档案、方屏几何/键位表与显示通路验证报告见
+> [`docs/CLAW4-PORT-PLAN.md`](docs/CLAW4-PORT-PLAN.md) · [`docs/CLAW4-PPA-VALIDATION.md`](docs/CLAW4-PPA-VALIDATION.md)。
+>
+> ![真机实拍：Metalio Claw4 方屏机身上的 GBA 游戏画面与 11 键触摸手柄 —— 上半屏是 720×480 游戏画面，下半屏左侧十字菱形方向键、中线竖排 SELECT/START/MENU、右侧菱形 R（上）/L（左）/A（右）/B（下），机身右下可见香槟金金属边框](docs/images/claw4-gba-castlevania-device.jpg)
+>
+> *Metalio Claw4（ESP32-P4 · 720×720 方屏）· GBA《恶魔城·晓月圆舞曲》3× 整数缩放贴顶（720×480）·
+> GBA 版键位表（11 键：L 占 Y 位、R 占 X 位，方屏不做 X/Y↔L/R 调换钮）· v0.4.9（`claw4` 分支）构建 ·
+> 2026-10-12 真机拍摄；当前版本界面与此图一致。*
+>
+> This `claw4` branch is the port to the **Metalio Claw4** (ESP32-P4, 720×720 square panel) — **not** the
+> M5Stack Tab5, whose target is untouched. The Tab5 text below is upstream reference only; the Claw4 port
+> records, square-screen geometry/keymap and display-path validation report live in
+> [`docs/CLAW4-PORT-PLAN.md`](docs/CLAW4-PORT-PLAN.md) and
+> [`docs/CLAW4-PPA-VALIDATION.md`](docs/CLAW4-PPA-VALIDATION.md).
+>
+> *Photo: Metalio Claw4 held in hand — GBA screen (integer 3x, 720×480, pinned to the top) plus the 11-key
+> touch pad in the 240 px band below (D-pad diamond left, SELECT/START/MENU stacked on the centre line,
+> R/L/A/B diamond right); build v0.4.9 (`claw4` branch), shot 2026-10-12. The UI is unchanged in the
+> current build.*
+
 M5Stack Tab5（ESP32-P4，1280x720 原生竖屏）上的复古游戏机固件：**GBA 满帧 60FPS**（RISC-V 动态重编译），
 并把 retro-core 的其余 10 个机种一起装进同一个固件 —— GB / GBC / NES / SNES / SMS / Game Gear /
 ColecoVision / PC Engine / Lynx / Game & Watch，共 11 个机种。
