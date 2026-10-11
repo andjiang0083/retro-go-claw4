@@ -119,7 +119,7 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 1   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
+#define CLAW4_PPA_CONVERT 0   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
                                      * 重新启用前必须先按 skill 铁律改成「非阻塞 + 回调 + xSemaphoreTake(timeout)，超时永久停用并落回 CPU」。
                                      * 颜色映射也仍未定论（自检曾因采样到纯黑块给出假 bad=0）。 */
 #endif
@@ -127,7 +127,9 @@
 #define CLAW4_PPA_SCALE_TEST 0   /* 测完改回 0 */
 #endif
 #ifndef CLAW4_PPA_RGB_SWAP
-#define CLAW4_PPA_RGB_SWAP 1     /* 自检判：fb 内存序是 B,G,R ⇒ PPA 出 RGB888 时要交换 */
+#define CLAW4_PPA_RGB_SWAP 0     /* A3 原始字节 dump 判：rs=1 会把 RED 变 0018e0（彻底错乱）；
+                                   * rs=0/bs=1 才是通道正确（差 ≤7 = 左移 vs 位复制）。
+                                   * 运行期颜色自检仍会自动定案并覆盖此默认值。 */
 #ifndef CLAW4_PPA_BYTE_SWAP
 #define CLAW4_PPA_BYTE_SWAP (-1)   /* -1 = 跟随 src_native（颜色自检会定案）；0/1 = 强制 */
 #endif
@@ -626,61 +628,6 @@ static void claw4_test_boot_task(void *arg)
 #endif
 
 
-#if CLAW4_PPA_CONVERT
-/* ══════════════════════════════════════════════════════════════════════════
- * PPA 原始输出字节 dump（2026-10-11 深夜 · 诊断用）
- * 背景：合成彩色图自检发现 4 种 (rgb_swap,byte_swap) 组合**全都不合格**，且输出不是参考值的
- *   字节重排 ⇒ 不再是"色序错"，而是 PPA 的 565→888 展开/布局与 CPU 不同。
- * 本 dump 把**输入字与输出字节**全打出来（6 个已知像素 × 2 种源序 × 4 组合 + CPU 参考），
- *   一眼判定：输出是 2 字节还是 3 字节/像素、展开是"左移 3"还是"复制高位"、byte_swap 作用于哪一侧。
- * 测完连同本函数一起撤（诊断专用，不留在交付版）。
- * ══════════════════════════════════════════════════════════════════════════ */
-static void claw4_ppa_dump(void)
-{
-    static const uint16_t probes[6] = { 0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000, 0xF42B };
-    static const char *names[6] = { "RED", "GREEN", "BLUE", "WHITE", "BLACK", "MIX" };
-    enum { PW = 4, PH = 1 };
-    static uint16_t dsrc[PW * PH]     __attribute__((aligned(128)));
-    static uint8_t  dout[PW * PH * 4] __attribute__((aligned(128)));
-    static uint8_t  dref[PW * PH * 3] __attribute__((aligned(128)));
-
-    for (int pi = 0; pi < 6; ++pi)
-    {
-        for (int sw = 0; sw < 2; ++sw)          /* sw=0：按原字存；sw=1：按大端交换后的字节存 */
-        {
-            const uint16_t w = sw ? claw4_swap16(probes[pi]) : probes[pi];
-            for (int i = 0; i < PW * PH; ++i) dsrc[i] = w;
-            /* CPU 参考（与驱动真路径同式：源非 native 时先换序） */
-            for (int i = 0; i < PW * PH; ++i)
-                claw4_put_pixel888(dref + i * 3, sw ? claw4_swap16(dsrc[i]) : dsrc[i]);
-
-            for (int ci = 0; ci < 4; ++ci)
-            {
-                const int rs = ci & 1, bs = (ci >> 1) & 1;
-                memset(dout, 0xEE, sizeof(dout));
-                ppa_srm_oper_config_t c = {
-                    .in  = { .buffer = dsrc, .pic_w = PW, .pic_h = PH, .block_w = PW, .block_h = PH,
-                             .block_offset_x = 0, .block_offset_y = 0, .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
-                    .out = { .buffer = dout, .buffer_size = (uint32_t)sizeof(dout),
-                             .pic_w = PW, .pic_h = PH, .block_offset_x = 0, .block_offset_y = 0,
-                             .srm_cm = PPA_SRM_COLOR_MODE_RGB888 },
-                    .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
-                    .scale_x = 1.0f, .scale_y = 1.0f,
-                    .mirror_x = false, .mirror_y = false,
-                    .rgb_swap = (bool)rs, .byte_swap = (bool)bs,
-                    .mode = PPA_TRANS_MODE_BLOCKING,
-                };
-                const esp_err_t e = ppa_do_scale_rotate_mirror(claw4_ppa, &c);
-                RG_LOGW("claw4-ppa-dump: %-5s in=%04x sw=%d rs=%d bs=%d err=%s "
-                        "cpu=%02x%02x%02x %02x%02x%02x out=%02x%02x%02x%02x %02x%02x%02x%02x\n",
-                        names[pi], (unsigned)w, sw, rs, bs, esp_err_to_name(e),
-                        dref[0], dref[1], dref[2], dref[3], dref[4], dref[5],
-                        dout[0], dout[1], dout[2], dout[3], dout[4], dout[5], dout[6], dout[7]);
-            }
-        }
-    }
-}
-#endif
 
 static void lcd_init(void)
 {
@@ -815,9 +762,6 @@ static void lcd_init(void)
         RG_LOGW("claw4-testboot: 任务已起，12s 后自动进游戏\n");
     }
 #endif
-#if CLAW4_PPA_CONVERT
-    if (claw4_ppa) claw4_ppa_dump();
-#endif
     RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d NUM_FBS=%d AUTOBOOT=%d AUTOPRESS=%d\n",
             (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST, dpi_cfg.num_fbs, (int)CLAW4_TEST_AUTOBOOT, (int)RG_TEST_AUTOPRESS_A_MS);
     RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
@@ -924,31 +868,44 @@ static int  claw4_ppa_byte_swap  = CLAW4_PPA_BYTE_SWAP;   /* -1 = 跟随 src_nat
 static bool claw4_ppa_cfg_ready  = false;
 static int  claw4_ppa_color_bad[4] = {-1, -1, -1, -1};    /* 供 PERF 行/脚本核对 */
 
+/*
+ * 颜色判据的门限（2026-10-11 深夜定，A3 原始字节 dump 实测）：
+ * PPA 的 565→888 是**左移**（r5<<3），CPU 是**位复制**（(r5<<3)|(r5>>2)）
+ *   ⇒ 两者**天然**差 ≤7/255（实测 maxdiff=7：RED 0000ff→0000f8、WHT ffffff→f8fcf8）。
+ * 这不是错、肉眼不可辨。之前判"逐字节相等"⇒ 把颜色其实正确的组合也判死（假红）。
+ * 实测唯一通道正确的组合是 rs=0/bs=1（A3；rs=1 会把 RED 变成 0018e0 = 彻底错乱）。
+ * 想恢复严格模式：改成 0。
+ */
+#ifndef CLAW4_PPA_COLOR_TOL
+#define CLAW4_PPA_COLOR_TOL 8
+#endif
 static bool claw4_ppa_color_selftest(bool src_native)
 {
     enum { CW = 32, CH = 8 };
-    static uint16_t csrc[CW * CH]      __attribute__((aligned(128)));
-    static uint8_t  cref[CW * CH * 3]  __attribute__((aligned(128)));
-    static uint8_t  cout[CW * CH * 3]  __attribute__((aligned(128)));
+    static uint16_t csrc[CW * CH]       __attribute__((aligned(128)));
+    static uint8_t  cref[CW * CH * 3]   __attribute__((aligned(128)));
+    static uint8_t  cout[CW * CH * 3]   __attribute__((aligned(128)));
+    static const char *PERM[6] = { "RGB", "RBG", "GRB", "GBR", "BRG", "BGR" };
+    static const int   PI[6][3] = { {0,1,2}, {0,2,1}, {1,0,2}, {1,2,0}, {2,0,1}, {2,1,0} };
 
     uint32_t seed = 0x9e3779b9u;
-    for (int i = 0; i < CW * CH; ++i)
+    for (int i2 = 0; i2 < CW * CH; ++i2)
     {
         seed = seed * 1103515245u + 12345u;
         const uint16_t r = (uint16_t)((seed >> 16) & 0x1Fu);
         const uint16_t g = (uint16_t)((seed >> 8) & 0x3Fu);
         const uint16_t b = (uint16_t)(seed & 0x1Fu);
         const uint16_t v = (uint16_t)((r << 11) | (g << 5) | b);
-        csrc[i] = src_native ? v : claw4_swap16(v);
+        csrc[i2] = src_native ? v : claw4_swap16(v);
     }
-    for (int i = 0; i < CW * CH; ++i)
-        claw4_put_pixel888(cref + i * 3, src_native ? csrc[i] : claw4_swap16(csrc[i]));
+    for (int i2 = 0; i2 < CW * CH; ++i2)
+        claw4_put_pixel888(cref + i2 * 3, src_native ? csrc[i2] : claw4_swap16(csrc[i2]));
 
     int winner = -1;
     for (int ci = 0; ci < 4; ++ci)
     {
         const int rs = ci & 1, bs = (ci >> 1) & 1;
-        memset(cout, 0xA5, sizeof(cout));
+        memset(cout, 0x11, sizeof(cout));
         ppa_srm_oper_config_t c = {
             .in  = { .buffer = csrc, .pic_w = CW, .pic_h = CH, .block_w = CW, .block_h = CH,
                      .block_offset_x = 0, .block_offset_y = 0, .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
@@ -964,27 +921,102 @@ static bool claw4_ppa_color_selftest(bool src_native)
         const esp_err_t e = ppa_do_scale_rotate_mirror(claw4_ppa, &c);
         if (e != ESP_OK)
         {
-            RG_LOGE("claw4-ppa-color: rgb_swap=%d byte_swap=%d CALL_FAIL %s\n", rs, bs, esp_err_to_name(e));
+            RG_LOGW("claw4-ppa-color: rs=%d bs=%d CALL_FAIL %s\n", rs, bs, esp_err_to_name(e));
             continue;
         }
-        uint32_t bad = 0;
-        for (int i = 0; i < CW * CH; ++i)
-            if (cref[i * 3] != cout[i * 3] || cref[i * 3 + 1] != cout[i * 3 + 1] ||
-                cref[i * 3 + 2] != cout[i * 3 + 2]) bad++;
-        claw4_ppa_color_bad[ci] = (int)bad;
-        RG_LOGW("claw4-ppa-color: rgb_swap=%d byte_swap=%d bad=%u/%d ref=%02x%02x%02x got=%02x%02x%02x\n",
-                rs, bs, (unsigned)bad, (int)(CW * CH),
-                cref[0], cref[1], cref[2], cout[0], cout[1], cout[2]);
-        if (bad == 0 && winner < 0) winner = ci;
+        /* 同序差（像素按同一下标、通道按同一序比） */
+        int md_id = 0;
+        for (int i2 = 0; i2 < CW * CH; ++i2)
+            for (int ch = 0; ch < 3; ++ch)
+            {
+                const int df = (int)cref[i2 * 3 + ch] - (int)cout[i2 * 3 + ch];
+                if (df > md_id) md_id = df;
+                if (-df > md_id) md_id = -df;
+            }
+        /* 6 种通道排列里最接近的（用来抓"红蓝互换"这类真错：那时排列才最接近） */
+        int md_best = 1 << 20, bi = 0;
+        for (int pi = 0; pi < 6; ++pi)
+        {
+            int md = 0;
+            for (int i2 = 0; i2 < CW * CH && md <= CLAW4_PPA_COLOR_TOL; ++i2)
+                for (int ch = 0; ch < 3; ++ch)
+                {
+                    const int df = (int)cref[i2 * 3 + ch] - (int)cout[i2 * 3 + PI[pi][ch]];
+                    if (df > md) md = df;
+                    if (-df > md) md = -df;
+                }
+            if (md < md_best) { md_best = md; bi = pi; }
+        }
+        claw4_ppa_color_bad[ci] = md_id;
+        RG_LOGW("claw4-ppa-color: rs=%d bs=%d maxdiff=%d bestperm=%s(%d)\n",
+                rs, bs, md_id, PERM[bi], md_best);
+        /* 判据：① 同序差 ≤ TOL（PPA 左移 vs CPU 位复制天然差 ≤7，不算错）
+         *      ② 同序必须不劣于任何通道排列（⇒ 红蓝互换/通道错乱会被抓出来） */
+        if (md_id <= CLAW4_PPA_COLOR_TOL && md_id <= md_best && winner < 0)
+            winner = ci;
     }
     if (winner < 0)
         return false;
     claw4_ppa_rgb_swap  = winner & 1;
     claw4_ppa_byte_swap = (winner >> 1) & 1;
-    RG_LOGW("claw4-ppa-color: ★选定 rgb_swap=%d byte_swap=%d（合成彩色图逐字节一致）\n",
-            claw4_ppa_rgb_swap, claw4_ppa_byte_swap);
+    RG_LOGW("claw4-ppa-color: ★选定 rgb_swap=%d byte_swap=%d（合成图 maxdiff≤%d 且同序最优）\n",
+            claw4_ppa_rgb_swap, claw4_ppa_byte_swap, CLAW4_PPA_COLOR_TOL);
     return true;
 }
+
+/* 真实块端到端比对：拿**真实游戏源码**跑 CPU 展开与 PPA 展开各一遍，取最大通道差。
+ * 这是颜色的终极机器判据（比合成图更硬）：真实数据、真实映射、真几何。
+ * 只在第一次确定映射时跑一次；用已证被接受的 32×8 几何；BLOCKING 一次性调用。 */
+static int claw4_ppa_real_verify(const uint16_t *src, bool src_native, int w)
+{
+    enum { RW = 32, RH = 8 };
+    static uint16_t rv_in[RW * RH]     __attribute__((aligned(128)));
+    static uint8_t  rv_out[RW * RH * 3] __attribute__((aligned(128)));
+    static uint8_t  rv_ref[RW * RH * 3] __attribute__((aligned(64)));
+
+    for (int r = 0; r < RH; ++r)
+        for (int c = 0; c < RW; ++c)
+        {
+            const uint16_t v = src[(size_t)r * w + c];
+            rv_in[r * RW + c] = v;
+            claw4_put_pixel888(rv_ref + (r * RW + c) * 3, src_native ? v : claw4_swap16(v));
+        }
+    memset(rv_out, 0x11, sizeof(rv_out));
+    ppa_srm_oper_config_t c = {
+        .in  = { .buffer = rv_in, .pic_w = RW, .pic_h = RH, .block_w = RW, .block_h = RH,
+                 .block_offset_x = 0, .block_offset_y = 0, .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
+        .out = { .buffer = rv_out, .buffer_size = (uint32_t)sizeof(rv_out),
+                 .pic_w = RW, .pic_h = RH, .block_offset_x = 0, .block_offset_y = 0,
+                 .srm_cm = PPA_SRM_COLOR_MODE_RGB888 },
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+        .scale_x = 1.0f, .scale_y = 1.0f,
+        .mirror_x = false, .mirror_y = false,
+        .rgb_swap = (bool)claw4_ppa_rgb_swap,
+        .byte_swap = (claw4_ppa_byte_swap < 0) ? !src_native : (bool)claw4_ppa_byte_swap,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    const esp_err_t e = ppa_do_scale_rotate_mirror(claw4_ppa, &c);
+    if (e != ESP_OK)
+    {
+        RG_LOGE("claw4-ppa-real: CALL_FAIL %s\n", esp_err_to_name(e));
+        return -1;
+    }
+    int md = 0, nd = 0;
+    for (int i2 = 0; i2 < RW * RH * 3; ++i2)
+    {
+        const int df = (int)rv_ref[i2] - (int)rv_out[i2];
+        const int a = df < 0 ? -df : df;
+        if (a > md) { md = a; nd = i2; }
+    }
+    RG_LOGW("claw4-ppa-real: maxdiff=%d (首个最差点 idx=%d ref=%02x%02x%02x got=%02x%02x%02x)\n",
+            md, nd, rv_ref[nd - nd % 3], rv_ref[nd - nd % 3 + 1], rv_ref[nd - nd % 3 + 2],
+            rv_out[nd - nd % 3], rv_out[nd - nd % 3 + 1], rv_out[nd - nd % 3 + 2]);
+    return md;
+}
+/*
+ * 颜色判据的门限见上方 CLAW4_PPA_COLOR_TOL（在自检函数之前定义）。
+ */
+
 #endif
 
 static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
@@ -1131,9 +1163,24 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         if (!claw4_ppa_cfg_ready)
         {
             claw4_ppa_cfg_ready = true;
-            if (!claw4_ppa_color_selftest(src_native))
+            bool color_ok = claw4_ppa_color_selftest(src_native);
+            if (color_ok && claw4_win_width >= 32 && rows >= 8)
             {
-                RG_LOGE("claw4-ppa-color: 无任何组合 bad=0 ⇒ 停用 PPA（颜色正确优先）\n");
+                const int rmd = claw4_ppa_real_verify(src_block, src_native, claw4_win_width);
+                if (rmd < 0 || rmd > CLAW4_PPA_COLOR_TOL)
+                {
+                    RG_LOGE("claw4-ppa-real: 真实块 maxdiff=%d > %d ⇒ 判定颜色不可用，停用 PPA\n",
+                            rmd, CLAW4_PPA_COLOR_TOL);
+                    color_ok = false;
+                }
+                else
+                {
+                    RG_LOGW("claw4-ppa-real: ✓ 真实块颜色一致（maxdiff=%d ≤ %d）\n", rmd, CLAW4_PPA_COLOR_TOL);
+                }
+            }
+            if (!color_ok)
+            {
+                RG_LOGE("claw4-ppa-color: 颜色判据不过 ⇒ 停用 PPA（颜色正确优先于帧率）\n");
                 ppa_unregister_client(claw4_ppa);
                 claw4_ppa = NULL;
             }
