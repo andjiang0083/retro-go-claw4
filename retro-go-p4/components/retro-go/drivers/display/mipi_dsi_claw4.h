@@ -35,6 +35,7 @@
 #include "esp_lcd_panel_io.h"      /* esp_lcd_panel_io_tx_param：init 后改面板亮度 DCS */
 #include "esp_lcd_mipi_dsi.h"      /* DPI 面板 + esp_lcd_dpi_panel_get_frame_buffer */
 #include "esp_cache.h"             /* esp_cache_msync：写帧缓冲后必须写回 */
+#include "esp_timer.h"             /* 诊断用一次性定时器（CLAW4_DIAG_MARKERS） */
 #include "esp_ldo_regulator.h"     /* DSI PHY 供电（chan3 @2500mV） */
 #include "driver/ledc.h"           /* 背光 PWM */
 #include "driver/i2c_master.h"     /* TCA9555（SD 卡槽供电使能） */
@@ -52,7 +53,20 @@
 /* DPI 像素时钟：厂商**运行中**的板级代码用 48MHz（面板头里的 60Hz 宏是 36MHz）。
  * 取 48 追随"实际能跑的配置"；若点屏异常，第一档就试 36。 */
 #define CLAW4_DPI_CLK_MHZ       48
-#define CLAW4_BPP               16        /* RGB565（vendor 驱动据此写 colmod 0x55） */
+/* 像素格式（**这里踩过坑，改之前先读完**）：
+ *   fb 侧 = RGB565（retro-go 的原生格式 ⇒ 推送路径不用做 CPU 转换，内存带宽减半）
+ *   面板侧 = RGB888 / colmod 0x77（**跟厂商基线一致**）
+ * 为什么面板侧不能是 16bpp：真机实测（2026-10-11）按 16bpp 配置时症状是
+ *   「颜色错 + 画面被斜切成漏斗 + 整体发暗」—— 面板按 24bpp 解读 16bpp 流，
+ *   每行像素数与时序都对不上，瞳孔里看到的就是这种斜切。
+ *   ⇒ 面板侧回到厂商的 24bpp；**转换交给 DSI 桥的硬件色彩转换**（out_color_format），
+ *     我们自己不写 565→888 的循环（那是每个像素的 CPU 税，P4 上白交）。
+ * 若颜色变成 R/B 互换，改 dev_cfg.rgb_ele_order（一个开关，不用动别处）。 */
+#define CLAW4_PANEL_BPP         24        /* → vendor 驱动据此写 colmod 0x77 */
+#define CLAW4_FB_BPP            24        /* 帧缓冲也 888：与面板一致，转换自己做（见下） */
+/* RGB888 帧缓冲的字节序：1 = B,G,R（IDF RGB888 帧缓冲 / LVGL RGB888 的内存布局，厂商同款）。
+ * 真机若出现红蓝互换，改这里为 0 即可（只影响推送路径的 3 字节顺序）。 */
+#define CLAW4_RGB888_BGR        1
 
 /* 背光 PWM */
 #define CLAW4_LEDC_TIMER        LEDC_TIMER_0
@@ -73,17 +87,34 @@
  * 所以默认也跟随：置 1 试不通就说明该保持 0。 */
 #define CLAW4_CALL_DISP_ON_OFF  0
 
+/* ══════════════ 临时诊断（"界面不出来"排查；结论落地后删除）══════════════
+ * 目的：一眼区分 —— ① launcher 的界面帧根本没进驱动  ② 进了但被跳过。
+ * 两个视觉标记（都画在**保留带**里，不会被界面覆盖）：
+ *   · 洋红方块（左下角 12x12）= 任何一次 lcd_send_buffer 调用
+ *   · 青色方块（右上角 12x12）= **整宽**推送（宽 720 的行块 = 界面帧的特征）
+ * 另：开机 3 秒后把整屏行校验和清零，逼 launcher 下一帧重推整屏
+ *   （若界面因此出现 ⇒ 推送链路是通的，只是开机那几帧被跳过了）。 */
+#define CLAW4_DIAG_MARKERS      1
+#define CLAW4_DIAG_REPUSH_MS    3000
+
 /* 面板亮度 / CABC（真机 2026-10-11 反馈"屏幕有点暗"的**真根因**，与我们的 PWM 无关）：
  * 厂商 DCS 序列里写着 `0x51 = 0x83`（≈51% 亮度）且 `0x55 = 0xD2`（开 CABC 内容自适应调光）——
  * 于是"软件 80% × 面板 51%"≈ 41%，暗是必然。
  * init 之后我们改回：0x51 = 0xFF（拉满）、0x55 = 0x00（关 CABC，暗场景不再被进一步压暗）。
  * 想用软件调光就改 CLAW4_DCS_BRIGHTNESS（0x00..0xFF）；设置里的背光档仍然只动 PWM。 */
-#define CLAW4_DCS_BRIGHTNESS    0xFF
+#define CLAW4_DCS_BRIGHTNESS_FIX 0        /* 0 = 不动（**厂商原值**，官方 demo 就是这个值）
+                                           * 1 = init 后改 0x51/0x55（见下） */
+#define CLAW4_DCS_BRIGHTNESS    0xFF      /* 仅在 FIX=1 时使用 */
 #define CLAW4_DCS_CABC_OFF      0x00
 
 static esp_lcd_panel_handle_t claw4_panel = NULL;
 static esp_lcd_panel_io_handle_t claw4_io = NULL;   /* DBI io：init 之后还要发亮度 DCS */
-static uint16_t *claw4_fb = NULL;      /* DPI 帧缓冲（PSRAM，720×720 RGB565，行跨距 720px） */
+/* DPI 帧缓冲（PSRAM，720×720 **RGB888**，行跨距 = 720*3 字节，无填充）。
+ * 为什么 fb 也必须是 888：面板的 DSI 接收器按 24bpp 配置（厂商基线 colmod 0x77），
+ * 而 IDF 的 dpi_panel_draw_bitmap **不做格式转换**（按 fb 的 bpp 直接 memcpy），
+ * 所以"fb 565 + 流 888"只剩 DSI 桥的硬件转换一条路 —— 实测那条路是**蓝屏（欠载）**。
+ * ⇒ fb 与流都 888，565→888 由本文件在推送路径里自己展开。 */
+static uint8_t *claw4_fb = NULL;
 static int claw4_fb_bytes = 0;
 /* 收集逻辑行用；长度必须编译期 ⇒ 按 geom.h 的 LCD_BUFFER_LENGTH_MAX 分配（720×32）。
  * 64 字节对齐：msync 只按 128B 对齐切分，但源缓冲对齐能让 memcpy 走向量路径。 */
@@ -171,6 +202,9 @@ static void claw4_sd_power_enable(void)
 /* 面板亮度修正：见 CLAW4_DCS_BRIGHTNESS 上方注释（厂商序列把亮度设成 51% 且开了 CABC）。 */
 static void claw4_panel_brightness_fix(void)
 {
+#if !CLAW4_DCS_BRIGHTNESS_FIX
+    return;                       /* 默认跟官方一致：面板亮度寄存器不动（0x51=0x83, 0x55=0xD2） */
+#else
     if (!claw4_io)
         return;
     const uint8_t b = CLAW4_DCS_BRIGHTNESS;
@@ -179,7 +213,120 @@ static void claw4_panel_brightness_fix(void)
     esp_err_t e2 = esp_lcd_panel_io_tx_param(claw4_io, 0x55, &c, 1);   /* Write CABC Control */
     RG_LOGI("claw4: panel brightness 0x51=0x%02X (was 0x83), CABC 0x55=0x%02X (was 0xD2) — tx err b=0x%x c=0x%x\n",
             b, c, (int)e1, (int)e2);
+#endif
 }
+
+#if CLAW4_DIAG_MARKERS
+/* 视觉探针：把 12x12 的方块画进**面板保留带**（界面与游戏都写不到那里）。
+ * BGR 三字节序（CLAW4_RGB888_BGR=1）：洋红 = B=FF,G=00,R=FF；青 = B=FF,G=FF,R=00。 */
+static uint32_t claw4_diag_calls, claw4_diag_fullw, claw4_diag_rows;
+static int claw4_diag_last_x, claw4_diag_last_y, claw4_diag_last_w, claw4_diag_last_h;
+static bool claw4_diag_after_boot;   /* 3 秒后的推送（= 界面帧是否还在来） */
+static uint32_t claw4_diag_fullw_boot;   /* 3 秒前的整宽推送次数 */
+static int claw4_diag_dump_blocks;       /* >0 = 还要逐块统计内容（强制重推时打开） */
+static const bool claw4_diag_tag_pixels = false;  /* 画角标记（污染画面，只用字符照片验证时关掉） */
+static uint32_t claw4_diag_widths[8];    /* 见过的块宽直方图（诊断用） */
+
+static void claw4_diag_markers(bool full_width_push)
+{
+    if (!claw4_fb)
+        return;
+    claw4_diag_calls++;
+    if (full_width_push)
+    {
+        claw4_diag_fullw++;
+        if (!claw4_diag_after_boot)
+            claw4_diag_fullw_boot++;
+    }
+    const int w = 12;
+    for (int yy = 0; yy < w; ++yy)
+    {
+        for (int xx = 0; xx < w; ++xx)
+        {
+            uint8_t *m = claw4_fb + ((size_t)(CLAW4_PHYS_H - w + yy) * CLAW4_PHYS_W + xx) * 3;   /* 左下角 */
+            m[0] = 0xFF; m[1] = 0x00; m[2] = 0xFF;                                               /* 洋红 */
+            if (full_width_push)
+            {
+                uint8_t *c = claw4_fb + ((size_t)yy * CLAW4_PHYS_W + (CLAW4_PHYS_W - w + xx)) * 3; /* 右上角 */
+                /* 时间编码：开机 3 秒内的整宽推送 = 蓝（B=FF,G=00,R=00）；
+                 * 3 秒之后 = 青（B=FF,G=FF,R=00）—— 只有"青"才能说明界面帧**现在还在来**。 */
+                c[0] = 0xFF; c[1] = claw4_diag_after_boot ? 0xFF : 0x00; c[2] = 0x00;
+            }
+        }
+    }
+    /* 两条带都要写回（128B 对齐：整行 2160B 不是 128 的整数倍，按整行范围向外扩） */
+    esp_cache_msync((void *)((uintptr_t)claw4_fb), (size_t)w * CLAW4_PHYS_W * 3 + 128,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    esp_cache_msync((void *)((uintptr_t)claw4_fb + (size_t)(CLAW4_PHYS_H - w) * CLAW4_PHYS_W * 3),
+                    (size_t)w * CLAW4_PHYS_W * 3 + 128, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
+/* 3 秒后作废整屏行校验和：逼 launcher 下一帧重推整屏（只清数组，不跨任务重画界面）。 */
+void rg_display_invalidate_lines(int top, int count);   /* 定义在 rg_display.c 后半（同 TU） */
+static void claw4_diag_repush(void *arg)
+{
+    (void)arg;
+    claw4_diag_after_boot = true;                 /* 之后的整宽推送会画成青色 */
+    claw4_diag_dump_blocks = 20;                  /* 把接下来 20 块的内容统计出来 */
+    rg_display_invalidate_lines(0, CLAW4_PHYS_H);
+    RG_LOGI("claw4-diag: 3s 到 —— 行校验和已清零，且之后的整宽推送改画青色\n");
+}
+
+/* 把帧缓冲（= 面板此刻扫描的内容）打成 ASCII 字符画。
+ * 用途：色块已证明"写进帧缓冲 = 面板显示"，所以这张字符画等价于给屏幕拍照，
+ * 我不用问用户就能看清面板上到底是什么。
+ * 每字符 = 8x12 像素，90 列 x 60 行覆盖 720x720。 */
+static void claw4_diag_dump_fb(void)
+{
+    if (!claw4_fb)
+        return;
+    const int cw = 8, ch = 8;
+    const int cols = CLAW4_PHYS_W / cw, rowsf = CLAW4_PHYS_H / ch;
+    char lineb[160];
+    RG_LOGI("claw4-diag-fb: 帧缓冲字符画（1 字符 = 8x12 px；' '=全黑 .=零星 :=少 +=中 #=多 @=很亮）\n");
+    for (int cy = 0; cy < rowsf; ++cy)
+    {
+        int n = 0;
+        if ((cy % 5) == 0 && cy > 0)
+            RG_LOGI("fb|---- y=%d ----\n", cy * ch);
+        for (int cx = 0; cx < cols; ++cx)
+        {
+            int cnt = 0;
+            for (int y = 0; y < ch; ++y)
+            {
+                const uint8_t *p = claw4_fb + ((size_t)(cy * ch + y) * CLAW4_PHYS_W + cx * cw) * 3;
+                for (int x = 0; x < cw; ++x, p += 3)
+                    if (p[0] | p[1] | p[2]) cnt++;
+            }
+            const int pct = cnt * 100 / (cw * ch);
+            lineb[n++] = cnt == 0 ? ' ' : pct < 5 ? '.' : pct < 25 ? ':' : pct < 50 ? '+' : pct < 75 ? '#' : '@';
+        }
+        lineb[n] = 0;
+        RG_LOGI("fb|%s|\n", lineb);
+    }
+}
+
+/* 每秒报一次：calls=总推送次数, fullw=整宽推送次数(其中 boot=3s前的), rows=累计行数, last=最后一块窗口 */
+static void claw4_diag_report(void *arg)
+{
+    (void)arg;
+    static int tick = 0;
+    ++tick;
+    if (tick == 6)                        /* 6 秒拍一张静态快照 */
+        claw4_diag_dump_fb();
+    RG_LOGI("claw4-diag: calls=%u fullw=%u boot_fullw=%u rows=%u after_boot=%d last=(%d,%d %dx%d)\n",
+            (unsigned)claw4_diag_calls, (unsigned)claw4_diag_fullw, (unsigned)claw4_diag_fullw_boot,
+            (unsigned)claw4_diag_rows, (int)claw4_diag_after_boot,
+            claw4_diag_last_x, claw4_diag_last_y, claw4_diag_last_w, claw4_diag_last_h);
+    RG_LOGI("claw4-diag-wh: 块宽直方图 = %u x%u, %u x%u, %u x%u, %u x%u\n",
+            (unsigned)claw4_diag_widths[0], (unsigned)claw4_diag_widths[1],
+            (unsigned)claw4_diag_widths[2], (unsigned)claw4_diag_widths[3],
+            (unsigned)claw4_diag_widths[4], (unsigned)claw4_diag_widths[5],
+            (unsigned)claw4_diag_widths[6], (unsigned)claw4_diag_widths[7]);
+}
+static esp_timer_handle_t claw4_diag_rep_timer = NULL;
+static esp_timer_handle_t claw4_diag_timer = NULL;
+#endif /* CLAW4_DIAG_MARKERS */
 
 static void lcd_init(void)
 {
@@ -216,10 +363,15 @@ static void lcd_init(void)
         return;
     }
 
-    /* RGB565：像素格式 + in/out 颜色格式都设 RGB565（IDF 5.5 用 _CF 变体给 in_color_format） */
-    esp_lcd_dpi_panel_config_t dpi_cfg = NV3051F_720_720_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB565);
-    dpi_cfg.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565;
-    dpi_cfg.out_color_format = LCD_COLOR_FMT_RGB565;
+    /* 全链路 RGB888 = 官方 MetalioClaw4 板级代码的**逐字段同款**（main/boards/metalio-claw-4/
+     * metalio-claw-4.cc: pixel_format/in/out 全 RGB888、48MHz、use_dma2d、colmod 24bpp）。
+     * ⚠ 别退回 fb=RGB565 + out=RGB888 那条"让 DSI 桥做硬件转换"的路：
+     *   IDF 的 dpi_panel_draw_bitmap **不做格式转换**（按 fb 的 bpp 直接 memcpy），
+     *   实测那样是**蓝屏（DSI 欠载）**。fb 565 + 流 565（colmod 0x55）则是"颜色错 + 漏斗"，
+     *   因为面板的 DSI 接收器是按 24bpp 配的，16bpp 流会让它的行时序逐行漂移。 */
+    esp_lcd_dpi_panel_config_t dpi_cfg = NV3051F_720_720_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB888);
+    dpi_cfg.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
+    dpi_cfg.out_color_format = LCD_COLOR_FMT_RGB888;   /* 与 fb 一致 = 不做桥转换（厂商基线） */
     dpi_cfg.num_fbs = 1;             /* 只一张帧缓冲：我们自己往里写，不要厂商那套三缓冲 */
     dpi_cfg.flags.use_dma2d = true;
     dpi_cfg.dpi_clock_freq_mhz = CLAW4_DPI_CLK_MHZ;   /* 覆盖宏里的 36（见文件头说明） */
@@ -235,7 +387,7 @@ static void lcd_init(void)
     const esp_lcd_panel_dev_config_t dev_cfg = {
         .reset_gpio_num = CLAW4_PIN_LCD_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-        .bits_per_pixel = CLAW4_BPP,     /* 16 ⇒ colmod 0x55（与 dpi_cfg 的 RGB565 必须一致） */
+        .bits_per_pixel = CLAW4_PANEL_BPP,   /* 24 ⇒ colmod 0x77，与 DSI 流的 out_color_format 一致 */
         .vendor_config = &vendor_cfg,
     };
     err = esp_lcd_new_panel_nv3051f(io, &dev_cfg, &claw4_panel);
@@ -255,8 +407,8 @@ static void lcd_init(void)
     void *fb = NULL;
     if (esp_lcd_dpi_panel_get_frame_buffer(claw4_panel, 1, &fb) == ESP_OK && fb)
     {
-        claw4_fb = (uint16_t *)fb;
-        claw4_fb_bytes = CLAW4_PHYS_W * CLAW4_PHYS_H * 2;
+        claw4_fb = (uint8_t *)fb;
+        claw4_fb_bytes = CLAW4_PHYS_W * CLAW4_PHYS_H * (CLAW4_FB_BPP / 8);
         memset(claw4_fb, 0, claw4_fb_bytes);          /* 先黑屏，避免看到上电垃圾数据 */
         esp_cache_msync(claw4_fb, claw4_fb_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     }
@@ -271,7 +423,22 @@ static void lcd_init(void)
     RG_SCREEN_INIT();                /* 约定钩子（本 target 为空宏；漏掉=显示驱动永不执行） */
 
     lcd_set_backlight(80);
-    RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB565, fb=%p\n",
+
+#if CLAW4_DIAG_MARKERS
+    if (!claw4_diag_timer)
+    {
+        const esp_timer_create_args_t targs = {.callback = claw4_diag_repush, .name = "claw4-diag"};
+        if (esp_timer_create(&targs, &claw4_diag_timer) == ESP_OK)
+            esp_timer_start_once(claw4_diag_timer, (uint64_t)CLAW4_DIAG_REPUSH_MS * 1000);
+    }
+    if (!claw4_diag_rep_timer)
+    {
+        const esp_timer_create_args_t rargs = {.callback = claw4_diag_report, .name = "claw4-diag-rep"};
+        if (esp_timer_create(&rargs, &claw4_diag_rep_timer) == ESP_OK)
+            esp_timer_start_periodic(claw4_diag_rep_timer, 1000000);
+    }
+#endif
+    RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
             CLAW4_PHYS_W, CLAW4_PHYS_H, CLAW4_DSI_LANES, CLAW4_DSI_LANE_MBPS,
             CLAW4_DPI_CLK_MHZ, (void *)claw4_fb);
 }
@@ -332,6 +499,42 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
     const int rows = (int)(length / (size_t)claw4_win_width);
     if (rows <= 0)
         return;
+#if CLAW4_DIAG_MARKERS
+    claw4_diag_last_x = claw4_win_left; claw4_diag_last_y = claw4_win_top;
+    claw4_diag_last_w = claw4_win_width; claw4_diag_last_h = rows;
+    claw4_diag_rows += (uint32_t)rows;
+    {
+        int slot = -1;
+        for (int i = 0; i < 8; ++i)
+            if (claw4_diag_widths[i * 2] == (uint32_t)claw4_win_width) { slot = i; break; }
+            else if (claw4_diag_widths[i * 2] == 0) { slot = i; break; }
+        if (slot >= 0) { claw4_diag_widths[slot * 2] = (uint32_t)claw4_win_width; claw4_diag_widths[slot * 2 + 1]++; }
+    }
+    if (claw4_diag_dump_blocks > 0)
+    {
+        /* 统计本块的内容：非黑像素数 + 非黑区域包围盒（源是 565 大端，黑 = 0x0000） */
+        uint32_t nonblack = 0;
+        int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -1, by1 = -1;
+        for (int r = 0; r < rows; ++r)
+        {
+            const uint16_t *row = buffer + (size_t)r * claw4_win_width;
+            for (int x = 0; x < claw4_win_width; ++x)
+            {
+                if (row[x] != 0)
+                {
+                    nonblack++;
+                    if (x < bx0) bx0 = x;
+                    if (x > bx1) bx1 = x;
+                    if (r < by0) by0 = r;
+                    if (r > by1) by1 = r;
+                }
+            }
+        }
+        claw4_diag_dump_blocks--;
+        RG_LOGI("claw4-diag-blk: y=%d w=%d rows=%d nonblack=%u bbox=(%d,%d)-(%d,%d)\n",
+                claw4_win_top, claw4_win_width, rows, (unsigned)nonblack, bx0, by0, bx1, by1);
+    }
+#endif
     if (claw4_win_left < 0 || claw4_win_left + claw4_win_width > CLAW4_PHYS_W ||
         claw4_win_top < 0 || claw4_win_top + rows > CLAW4_PHYS_H)
     {
@@ -340,26 +543,59 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         return;
     }
 
-    /* 源是 565 大端 → 面板要小端：逐像素换回（tab5 同约定）。
-     * 写成"按行 memcpy + 就地交换"而不是逐像素写目标：目标是 PSRAM，随机访问慢，
-     * 顺序写整行再整体 msync 才是快路径。 */
-    uint16_t *dst = claw4_fb + (size_t)claw4_win_top * CLAW4_PHYS_W + claw4_win_left;
+    /* 源是 565 大端（rg_display 已交换）→ 展开成 BGR888 写进面板帧缓冲。
+     * 字节序 B,G,R：与 IDF RGB888 帧缓冲/LVGL RGB888 的内存布局一致（厂商同款）。
+     * 若真机出现红蓝互换 ⇒ 把 CLAW4_RGB888_BGR 改 0（一处开关，别改别处）。
+     * 顺序写整行（目标是 PSRAM，随机访问慢），最后整体 msync。 */
+    uint8_t *dst = claw4_fb + ((size_t)claw4_win_top * CLAW4_PHYS_W + claw4_win_left) * 3;
     for (int r = 0; r < rows; ++r)
     {
-        uint16_t *src_row = buffer + (size_t)r * claw4_win_width;
-        uint16_t *dst_row = dst + (size_t)r * CLAW4_PHYS_W;
+        const uint16_t *src_row = buffer + (size_t)r * claw4_win_width;
+        uint8_t *dst_row = dst + (size_t)r * CLAW4_PHYS_W * 3;
         for (int x = 0; x < claw4_win_width; ++x)
-            dst_row[x] = claw4_swap16(src_row[x]);
+        {
+            const uint16_t v = claw4_swap16(src_row[x]);       /* 回到 565 自然取值 */
+            const uint8_t r5 = (uint8_t)((v >> 11) & 0x1F);
+            const uint8_t g6 = (uint8_t)((v >> 5) & 0x3F);
+            const uint8_t b5 = (uint8_t)(v & 0x1F);
+            const uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
+            const uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
+            const uint8_t b8 = (uint8_t)((b5 << 3) | (b5 >> 2));
+#if CLAW4_RGB888_BGR
+            dst_row[x * 3 + 0] = b8;
+            dst_row[x * 3 + 1] = g8;
+            dst_row[x * 3 + 2] = r8;
+#else
+            dst_row[x * 3 + 0] = r8;
+            dst_row[x * 3 + 1] = g8;
+            dst_row[x * 3 + 2] = b8;
+#endif
+        }
     }
 
     /* cache 写回：msync 要求偏移与长度都是 **128 字节的整数倍**，否则静默失败。
      * 窗口偏移不保证对齐（720px 行 = 1440B，1440%128=32）⇒ 向外扩到 128B 边界，
      * 多写几个字节无害（同一张帧缓冲、都是我们要显示的内容）。 */
     const size_t off = (size_t)((uintptr_t)dst - (uintptr_t)claw4_fb);
-    const size_t len = (size_t)claw4_win_width * 2;
+    const size_t px_bytes = CLAW4_FB_BPP / 8;
+    const size_t stride = (size_t)CLAW4_PHYS_W * px_bytes;
+    const size_t len = (size_t)claw4_win_width * px_bytes;
     size_t start = off & ~(size_t)127;
-    size_t end = (off + (size_t)(rows - 1) * CLAW4_PHYS_W * 2 + len + 127) & ~(size_t)127;
+    size_t end = (off + (size_t)(rows - 1) * stride + len + 127) & ~(size_t)127;
     if (end > (size_t)claw4_fb_bytes)
         end = (size_t)claw4_fb_bytes;
     esp_cache_msync((void *)((uintptr_t)claw4_fb + start), end - start, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+#if CLAW4_DIAG_MARKERS
+    if (claw4_diag_tag_pixels)
+        claw4_diag_markers(claw4_win_width >= CLAW4_PHYS_W);
+#endif
+
+    /* ★★ 连续推送时窗口向下推进 ★★
+     * rg_display.c 的流式路径只在"窗口不连续"时才调 lcd_set_window（见 rg_display.c:450
+     * 的 `if (top != window_top)` 记账）—— 它**假定驱动内部有写游标**会在每次推送后下移。
+     * 漏掉这一行的后果：整屏每一块都写回同一个 win_top（我实测 dump 出 15 块全是 y=0），
+     * 最后一块覆盖前面的 ⇒ launcher 界面永远出不来（只有直写路径的沙漏能看见）。
+     * 语义与 Tab5 驱动 mipi_dsi_tab5.h:1165 一字不差，别删。 */
+    claw4_win_top += rows;
 }
