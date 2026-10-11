@@ -119,9 +119,14 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 1   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
-                                     * 重新启用前必须先按 skill 铁律改成「非阻塞 + 回调 + xSemaphoreTake(timeout)，超时永久停用并落回 CPU」。
-                                     * 颜色映射也仍未定论（自检曾因采样到纯黑块给出假 bad=0）。 */
+#define CLAW4_PPA_CONVERT 1   /* ✓ 2026-10-11 深夜已收口：三项判据全绿，证据与复跑方法见 docs/CLAW4-PPA-VALIDATION.md。
+                                       *  · 历史事故（勿重犯）：BLOCKING 模式下"配置被接受但永不完成"会**永久阻塞、不返回错误码**
+                                       *    ⇒ 游戏里按 MENU（GUI 推 339/323 宽小块）整机卡死（其后 63 秒全 0 帧、无 panic）。
+                                       *    现形态 = 非阻塞 + 完成回调 + 有界等待(CLAW4_PPA_DRAIN_TIMEOUT_MS) + 超时永久停用
+                                       *    该通路并落回 CPU；守卫只放"整宽 left=0"的界面块进 PPA，GUI 小块直接走 CPU。
+                                       *    真机实测：MENU 注入回归 GREEN（MENU#2 后 FPS 回 61），稳态零超时。
+                                       *  · 颜色映射已定案：运行期自检自动选出 (rgb_swap=0, byte_swap=1) —— 合成图四组合中
+                                       *    maxdiff=7 唯一达标且同序最优；rs=1 会把 RED f800→0018e0 彻底错乱。 */
 #endif
 /* ★ 这三个开关必须定义在所有使用点之前（2026-10-11 深夜踩过：开关定义在使用点之后 ⇒
  *   `#if CLAW4_PPA_NONBLOCK` 在未定义处按 0 求值 ⇒ 注册回调那段被**静默跳过**、
