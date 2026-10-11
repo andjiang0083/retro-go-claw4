@@ -1251,13 +1251,22 @@ void rg_input_deinit(void)
  * 这个负载不需要人在旁边按。默认 0 ⇒ 对 Tab5 与正常构建零影响。
  * 只在开机 DELAY_MS 之后才开始（启动器早期有"幽灵输入"历史，别掺进去）。 */
 #ifndef RG_TEST_AUTOPRESS_A_MS
-#define RG_TEST_AUTOPRESS_A_MS 0
+#define RG_TEST_AUTOPRESS_A_MS 0        /* >0：每 N ms 合成一次按键（负载） */
 #endif
 #ifndef RG_TEST_AUTOPRESS_PULSE_MS
 #define RG_TEST_AUTOPRESS_PULSE_MS 120
 #endif
 #ifndef RG_TEST_AUTOPRESS_DELAY_MS
 #define RG_TEST_AUTOPRESS_DELAY_MS 12000
+#endif
+#ifndef RG_TEST_AUTOPRESS_KEY_MASK
+#define RG_TEST_AUTOPRESS_KEY_MASK RG_KEY_A   /* 合成哪个键（负载默认 A=跳） */
+#endif
+#ifndef RG_TEST_AUTOPRESS_MENU_AT_MS
+#define RG_TEST_AUTOPRESS_MENU_AT_MS 0   /* >0：在 t=该毫秒时合成一次 MENU（开菜单/触发 GUI 路径） */
+#endif
+#ifndef RG_TEST_AUTOPRESS_MENU2_AT_MS
+#define RG_TEST_AUTOPRESS_MENU2_AT_MS 0  /* >0：再合成一次 MENU（关菜单）——判据看之后 FPS 是否恢复 */
 #endif
 
 uint32_t rg_input_read_gamepad(void)
@@ -1277,25 +1286,44 @@ uint32_t rg_input_read_gamepad(void)
         }
     }
 #endif
-#if RG_TEST_AUTOPRESS_A_MS > 0
+#if (RG_TEST_AUTOPRESS_A_MS > 0) || (RG_TEST_AUTOPRESS_MENU_AT_MS > 0) || (RG_TEST_AUTOPRESS_MENU2_AT_MS > 0)
     {
-        /* 合成 A：不需要"按下—释放"硬件事件，直接 OR 进返回的位掩码 */
         static int64_t ap_t0 = 0;
         const int64_t ap_now = rg_system_timer();          /* 微秒 */
         if (ap_t0 == 0) ap_t0 = ap_now;
         const int64_t el_ms = (ap_now - ap_t0) / 1000;
+        /* MENU 单次/二次注入：把"按 MENU 卡死"变成可自动复现、可自动验证的用例。
+         * 判据 = 第二次 MENU 之后 FPS 是否恢复（菜单开/关会恢复；真卡死不会）。 */
+#if RG_TEST_AUTOPRESS_MENU_AT_MS > 0
+        if (el_ms >= RG_TEST_AUTOPRESS_MENU_AT_MS && el_ms < RG_TEST_AUTOPRESS_MENU_AT_MS + RG_TEST_AUTOPRESS_PULSE_MS)
+        {
+            static bool ap_m1 = false;
+            if (!ap_m1) { ap_m1 = true; RG_LOGW("autopress: MENU#1 合成（t=%dms）\n", (int)el_ms); }
+            return gamepad_state | RG_KEY_MENU;
+        }
+#endif
+#if RG_TEST_AUTOPRESS_MENU2_AT_MS > 0
+        if (el_ms >= RG_TEST_AUTOPRESS_MENU2_AT_MS && el_ms < RG_TEST_AUTOPRESS_MENU2_AT_MS + RG_TEST_AUTOPRESS_PULSE_MS)
+        {
+            static bool ap_m2 = false;
+            if (!ap_m2) { ap_m2 = true; RG_LOGW("autopress: MENU#2 合成（t=%dms）—— 之后 FPS 若回不到 50+ 即为卡死\n", (int)el_ms); }
+            return gamepad_state | RG_KEY_MENU;
+        }
+#endif
+#if RG_TEST_AUTOPRESS_A_MS > 0
         if (el_ms >= RG_TEST_AUTOPRESS_DELAY_MS &&
             (el_ms % RG_TEST_AUTOPRESS_A_MS) < RG_TEST_AUTOPRESS_PULSE_MS)
         {
             static int64_t ap_last_log = -100000;
-            if (el_ms - ap_last_log > 10000)               /* 每 10s 说一次，便于确认它真的在按 */
+            if (el_ms - ap_last_log > 10000)
             {
                 ap_last_log = el_ms;
                 RG_LOGW("autopress: 合成 A 键中（每 %dms 一次，脉宽 %dms）\n",
                         (int)RG_TEST_AUTOPRESS_A_MS, (int)RG_TEST_AUTOPRESS_PULSE_MS);
             }
-            return gamepad_state | RG_KEY_A;
+            return gamepad_state | (RG_TEST_AUTOPRESS_KEY_MASK);
         }
+#endif
     }
 #endif
     return gamepad_state;

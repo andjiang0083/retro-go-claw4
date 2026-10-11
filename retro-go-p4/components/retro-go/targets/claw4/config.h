@@ -157,7 +157,9 @@
 #define RG_ENABLE_TOUCH_GAMEPAD 1
 /* 测量用：合成 A 键（2s 一次）。用户定义的负载路径：launcher 里按 A 进游戏 ⇒ 游戏内 A=跳。
  * ★ 测量构建专用；测完必须回 0（"测量开关不许过夜"，见 CLAW4-P3-FPS.md）。默认 0。 */
-#define RG_TEST_AUTOPRESS_A_MS 0
+#define RG_TEST_AUTOPRESS_A_MS 0 
+#define RG_TEST_AUTOPRESS_MENU2_AT_MS 0 
+#define RG_TEST_AUTOPRESS_MENU_AT_MS 0 
 
 
 /* ── 开机 recovery 组合键：**关掉**（0 = 永不触发）─────────────────────────
