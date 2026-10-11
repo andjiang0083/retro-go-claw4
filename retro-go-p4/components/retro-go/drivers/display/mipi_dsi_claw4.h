@@ -109,6 +109,25 @@
 #define CLAW4_DCS_BRIGHTNESS    0xFF      /* 仅在 FIX=1 时使用 */
 #define CLAW4_DCS_CABC_OFF      0x00
 
+/* ⚠ PPA 转换档（P3 实验，2026-10-11）：
+ *   动机：显示路径 = 帧的 79%，其中"往 PSRAM 帧缓冲写 888"实测 ~34 周期/像素；
+ *         中间 565 缓冲在**片内 SRAM**（便宜）⇒ 融合省不了多少（A/B 已证），
+ *         真正要挪走的是"逐像素写 PSRAM"这一步 ⇒ 交给 PPA 硬件 SRM 做格式转换。
+ *   历史纠正：Tab5 那句"PPA 按块输 CPU 25×"的前提已被复测推翻 —— 真凶是每块跟着搬的
+ *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
+ *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
+#ifndef CLAW4_PPA_CONVERT
+#define CLAW4_PPA_CONVERT 0
+#endif
+#ifndef CLAW4_PPA_SCALE_TEST
+#define CLAW4_PPA_SCALE_TEST 0   /* 测完改回 0 */
+#endif
+#ifndef CLAW4_PPA_RGB_SWAP
+#define CLAW4_PPA_RGB_SWAP 1     /* 自检判：fb 内存序是 B,G,R ⇒ PPA 出 RGB888 时要交换 */
+#endif
+#include "driver/ppa.h"
+static ppa_client_handle_t claw4_ppa = NULL;
+
 static esp_lcd_panel_handle_t claw4_panel = NULL;
 static esp_lcd_panel_io_handle_t claw4_io = NULL;   /* DBI io：init 之后还要发亮度 DCS */
 /* DPI 帧缓冲（PSRAM，720×720 **RGB888**，行跨距 = 720*3 字节，无填充）。
@@ -149,6 +168,64 @@ static inline uint16_t claw4_swap16(uint16_t v)
 {
     return (uint16_t)((v << 8) | (v >> 8));
 }
+
+/* ═══ P0-A：4 像素一组的**字对齐**展开（565 → BGR888）════════════════════════════
+ * 动机（claw4-PERF 真机实测，2026-10-11）：逐像素走 claw4_put_pixel888 = 往 PSRAM
+ *   **一个像素 3 次单字节写**，实测 97ns/像素 ≈ 35 周期/像素、占整机墙钟 50%。
+ *   同样像素按字写只要 ~15.6MB/s，而 PSRAM 顺序带宽实测 ~92MB/s ⇒ 成本在"逐字节"
+ *   这个形态上，不在带宽上。
+ * 做法：每 4 个源像素攒成 12 字节（= 3 个 32 位字，4 字节对齐才可用），一次写完；
+ *   目的不对齐（win_left*3 % 4 != 0）或行尾不足 4 像素时，自动回落到老字节路径。
+ * 语义必须与 claw4_put_pixel888 **逐字节一致** ⇒ 见 CLAW4_XPOSE_SELFCHECK（机器比对）。 */
+#ifndef CLAW4_XPOSE_WORDS
+/* ⚠ 2026-10-11 同场景 A/B 结论：**默认关**（保留开关只为复现负结果）。
+ *   开：display=785 [copy=0 xpose=699]；关：display=791 [copy=148 xpose=555]
+ *   ⇒ 两遍合并成一遍**没有收益**，总和不动（783 vs 784）。
+ *   原诊断"逐像素 3 次单字节写 PSRAM = 35 周期/像素的元凶"被证伪：
+ *   cache 本就把字节写聚合成整行写回，字宽不是瓶颈；真正的量级是**每帧搬运字节数**
+ *   （2.5MB/帧 ÷ 24.7ms ≈ 101MB/s ≈ 本机 PSRAM 顺序带宽）⇒ 要走"少搬"路线（融合缩放+展开），
+ *   不是"搬得更宽"。详见 docs/CLAW4-P3-FPS.md。 */
+#define CLAW4_XPOSE_WORDS 0
+#endif
+#ifndef CLAW4_XPOSE_SELFCHECK
+#define CLAW4_XPOSE_SELFCHECK 0   /* 临时自检：前 8 个块与老路径逐字节比对 */
+#endif
+
+/* 允许别名访问的 32 位类型：按字写 PSRAM 时避免严格别名 UB。 */
+typedef uint32_t __attribute__((may_alias)) claw4_u32a;
+
+/* 单元格布局（小端）：B | G<<8 | R<<16，与 claw4_put_pixel888 的 d[0..2] 一一对应。 */
+static inline uint32_t claw4_bgr(uint16_t v)
+{
+    const uint32_t r5 = (v >> 11) & 0x1Fu;
+    const uint32_t g6 = (v >> 5) & 0x3Fu;
+    const uint32_t b5 = v & 0x1Fu;
+    const uint32_t r8 = (r5 << 3) | (r5 >> 2);
+    const uint32_t g8 = (g6 << 2) | (g6 >> 4);
+    const uint32_t b8 = (b5 << 3) | (b5 >> 2);
+#if CLAW4_RGB888_BGR
+    return b8 | (g8 << 8) | (r8 << 16);
+#else
+    return r8 | (g8 << 8) | (b8 << 16);
+#endif
+}
+
+/* 4 个像素（已 native）→ 12 字节，3 个对齐字。 */
+static inline void claw4_expand4(claw4_u32a *w, uint16_t v0, uint16_t v1, uint16_t v2, uint16_t v3)
+{
+    const uint32_t p0 = claw4_bgr(v0), p1 = claw4_bgr(v1), p2 = claw4_bgr(v2), p3 = claw4_bgr(v3);
+    w[0] = (p0 & 0x00FFFFFFu) | ((p1 & 0xFFu) << 24);                       /* B0 G0 R0 B1 */
+    w[1] = ((p1 >> 8) & 0xFFFFu) | ((p2 & 0x00FFu) << 16) | ((p2 & 0xFF00u) << 16); /* G1 R1 B2 G2 */
+    w[2] = ((p2 >> 16) & 0xFFu) | ((p3 & 0x00FFu) << 8) | ((p3 & 0xFF00u) << 8) | ((p3 >> 16) << 24); /* R2 B3 G3 R3 */
+}
+
+/* 控制带（虚拟按键 + 皮肤面板）的顶边。claw4 touch_layout.h 的两套布局取 min：
+ *   GBA 版按键 y[492,708]、SNES 版贴角 L/R y480..552 ⇒ 带顶 = 480。
+ * 游戏区 240×160@3x 贴顶 = y0..480，**永不与带相交** ⇒ 那块「大端→原生拷贝 + 叠加层合成」
+ * 是纯浪费（实测 copy 段 135ms/s ≈ 墙钟 13.5%）。Tab5 不走本驱动，此常量只影响 claw4。 */
+#ifndef CLAW4_BAND_TOP
+#define CLAW4_BAND_TOP 480
+#endif
 
 /* ──────────────────────────── 背光（LEDC PWM）──────────────────────────── */
 static void claw4_backlight_init(void)
@@ -233,6 +310,59 @@ static void claw4_sd_power_enable(void)
     esp_err_t e1 = i2c_master_transmit(dev, cfg_out, sizeof(cfg_out), 100);
     esp_err_t e2 = i2c_master_transmit(dev, out_val, sizeof(out_val), 100);
     RG_LOGI("claw4: TCA9555 SD power enable: cfg=0x%x out=0x%x\n", (int)e1, (int)e2);
+
+#if CLAW4_PPA_CONVERT
+    {
+        ppa_client_config_t pc = {
+            .oper_type = PPA_OPERATION_SRM,
+            .max_pending_trans_num = 1,
+        };
+        const esp_err_t pr = ppa_register_client(&pc, &claw4_ppa);
+        RG_LOGI("claw4: PPA register: %s\n", esp_err_to_name(pr));
+        if (pr != ESP_OK)
+            claw4_ppa = NULL;   /* 失败则整档退回 CPU 展开 */
+    }
+#endif
+
+#if CLAW4_PPA_SCALE_TEST
+    /* ── PPA 缩放滤波性质判定（机器可判）─────────────────────────────
+     * 造 8×2 的测试图（每像素值互不相同，任何插值都会露馅），PPA 放大到 24×6，
+     * 与 CPU 最近邻放大的结果逐字节比。不一致像素 = 0 ⇒ 是最近邻 ⇒ 可采用
+     * "PPA 直接从模拟器原始小图放大进 fb" 的架构；否则只能做 1:1 格式转换。 */
+    if (claw4_ppa)
+    {
+        static uint16_t tsrc[8 * 2];
+        static uint16_t tref[24 * 6];
+        static uint16_t tgot[24 * 6];
+        for (int i = 0; i < 8 * 2; ++i)
+            tsrc[i] = (uint16_t)(0x1000 + i * 0x0111);      /* 相邻像素必须不同 */
+        for (int y = 0; y < 6; ++y)
+            for (int x = 0; x < 24; ++x)
+                tref[y * 24 + x] = tsrc[(y / 3) * 8 + (x / 3)];   /* CPU 最近邻 3x */
+        ppa_srm_oper_config_t tc = {
+            .in  = { .buffer = tsrc, .pic_w = 8, .pic_h = 2,
+                     .block_w = 8, .block_h = 2, .block_offset_x = 0, .block_offset_y = 0,
+                     .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
+            .out = { .buffer = tgot, .buffer_size = sizeof(tgot),
+                     .pic_w = 24, .pic_h = 6,
+                     .block_offset_x = 0, .block_offset_y = 0,
+                     .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+            .scale_x = 3.0f, .scale_y = 3.0f,
+            .rgb_swap = false, .byte_swap = false,
+            .mode = PPA_TRANS_MODE_BLOCKING,
+        };
+        const esp_err_t tr = ppa_do_scale_rotate_mirror(claw4_ppa, &tc);
+        int mism = 0, first = -1;
+        for (int i = 0; i < 24 * 6; ++i)
+            if (tgot[i] != tref[i]) { if (first < 0) first = i; mism++; }
+        RG_LOGI("claw4-PPA-SCALE-TEST: err=%s mism=%d/%d first=%d ref[0]=%04x got[0]=%04x got[1]=%04x got[3]=%04x\n",
+                esp_err_to_name(tr), mism, 24 * 6, first,
+                tref[0], tgot[0], tgot[1], tgot[3]);
+        RG_LOGI("claw4-PPA-SCALE-TEST: 判定 = %s\n",
+                mism == 0 ? "最近邻（可采用 PPA 直接放大架构）" : "插值（像素画会糊 ⇒ 只做 1:1 格式转换）");
+    }
+#endif
 }
 
 /* ──────────────────────────── 面板初始化 ───────────────────────────────── */
@@ -637,6 +767,40 @@ static inline uint16_t *lcd_get_buffer(size_t length)
 }
 
 
+/* ═══ 临时性能探针（P3 帧率压榨，2026-10-11；量完按下面清单撤净）══════════════════
+ * 照 mipi_dsi_tab5.h 的 PERF 格式：每秒一行，给 PC 侧统计（不看屏）。
+ *   claw4-PERF: display=Tms/s [copy= ovl= xpose= msync= ] blocks=N rowsp1=N px=N
+ *   display = 本驱动 lcd_send_buffer() 全程耗时；四段是它的组成部分（余量 = 记账外）。
+ * 撤销清单（交付前逐条做）：
+ *   1. 删本块（esp_timer.h include + claw4_pf_* 变量 + claw4_pf_report）
+ *   2. lcd_send_buffer() 里 6 处时间戳/累计 + 末尾 1 处 claw4_pf_report() 调用
+ *   3. 确认 esp_timer.h 在本文件别无他用（原本只有 rg_input.c 用） */
+#include "esp_timer.h"
+static uint64_t claw4_pf_total, claw4_pf_copy, claw4_pf_ovl, claw4_pf_xpose, claw4_pf_msync;
+static uint32_t claw4_pf_blocks, claw4_pf_px, claw4_pf_selfcheck;
+static uint64_t claw4_pf_ppa_us; static uint32_t claw4_pf_ppa_ops, claw4_pf_ppa_err;
+static bool claw4_pf_msync_done;
+static int64_t claw4_pf_win = 0;
+static void claw4_pf_report(void)
+{
+    const int64_t now = esp_timer_get_time();
+    if (claw4_pf_win == 0) { claw4_pf_win = now; return; }
+    const int64_t el = now - claw4_pf_win;
+    if (el < 1000000) return;
+    RG_LOGI("claw4-PERF: display=%ums/%ums [copy=%u ovl=%u xpose=%u msync=%u] blocks=%u px=%u\n",
+            (unsigned)(claw4_pf_total / 1000), (unsigned)(el / 1000),
+            (unsigned)(claw4_pf_copy / 1000), (unsigned)(claw4_pf_ovl / 1000),
+            (unsigned)(claw4_pf_xpose / 1000), (unsigned)(claw4_pf_msync / 1000),
+            (unsigned)claw4_pf_blocks, (unsigned)(claw4_pf_px / 1024));
+    if (claw4_pf_ppa_ops || claw4_pf_ppa_err)
+        RG_LOGI("claw4-PERF-ppa: ops=%u err=%u us=%u\n",
+                (unsigned)claw4_pf_ppa_ops, (unsigned)claw4_pf_ppa_err, (unsigned)claw4_pf_ppa_us);
+    claw4_pf_ppa_ops = claw4_pf_ppa_err = 0; claw4_pf_ppa_us = 0;
+    claw4_pf_total = claw4_pf_copy = claw4_pf_ovl = claw4_pf_xpose = claw4_pf_msync = 0;
+    claw4_pf_blocks = claw4_pf_px = 0;
+    claw4_pf_win = now;
+}
+
 /* 把一块**逻辑行**写进面板帧缓冲：逻辑 (lx,ly) = 物理 (lx,ly) ⇒ 直接按行拷贝。
  * length 单位是像素（= 宽度 × 行数），与 rg_display.c 的约定一致；length=0 = 空操作。 */
 static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
@@ -691,6 +855,8 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         return;
     }
 
+    const int64_t pf_all0 = esp_timer_get_time();
+
     /* 源是 565 大端（rg_display 已交换）→ 展开成 BGR888 写进面板帧缓冲。
      * 字节序 B,G,R：与 IDF RGB888 帧缓冲/LVGL RGB888 的内存布局一致（厂商同款）。
      * 若真机出现红蓝互换 ⇒ 把 CLAW4_RGB888_BGR 改 0（一处开关，别改别处）。
@@ -703,9 +869,25 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
      * 索引是**块内相对**的（与 Tab5 用 tab5_stage 的调用方式一致）。 */
     const uint16_t *src_block = buffer;
     bool src_native = false;
+    bool pf_ovl_ran = false;
+    int64_t pf_t0 = esp_timer_get_time();
+    /* P0-B：只有与控制带相交、且叠加层可见的块才需要"还原成原生 565 + 合成按键"。 */
+#ifndef CLAW4_SKIP_NONBAND
+#define CLAW4_SKIP_NONBAND 1     /* 0 = A/B 对照：恢复"每块都做拷贝+合成" */
+#endif
+#if CLAW4_SKIP_NONBAND
+    /* 用叠加层**实际包围盒**判，而不是"块是否落在控制带内"：
+     *   · 开关（眼睛）画在游戏区左上角 (12,12) —— 按"带"判会把游戏区的块全跳过，把开关擦掉；
+     *   · 依据：blit 对每个元素都先做矩形裁剪 ⇒ **包围盒之外它一定是 no-op** ⇒ 跳过不改像素。 */
+    const bool band_block = rg_overlay_rows_dirty(claw4_win_top, claw4_win_top + rows);
+#else
+    const bool band_block = true;
+#endif
 #if RG_OVERLAY_ENABLED
-    if ((size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX)
+    if (band_block && rg_overlay_get_visible() &&
+        (size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX)
     {
+        pf_ovl_ran = true;
         for (int r = 0; r < rows; ++r)
         {
             const uint16_t *s = buffer + (size_t)r * claw4_win_width;
@@ -713,22 +895,128 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
             for (int x = 0; x < claw4_win_width; ++x)
                 d[x] = claw4_swap16(s[x]);
         }
+        int64_t pf_t1 = esp_timer_get_time();
+        claw4_pf_copy += (uint64_t)(pf_t1 - pf_t0);
         rg_overlay_blit_linear(claw4_ovl_scratch, claw4_win_width, claw4_win_left, claw4_win_top,
                                claw4_win_width, rows, CLAW4_PHYS_W);
+        claw4_pf_ovl += (uint64_t)(esp_timer_get_time() - pf_t1);
         src_block = claw4_ovl_scratch;
         src_native = true;
     }
 #endif
+    pf_t0 = esp_timer_get_time();
 
     uint8_t *dst = claw4_fb + ((size_t)claw4_win_top * CLAW4_PHYS_W + claw4_win_left) * 3;
+    const bool dst_aligned = (((uintptr_t)dst & 3u) == 0);
+#if CLAW4_PPA_CONVERT
+    /* PPA 只处理"本块不需要叠加层合成"的情形（需要合成的块必须 CPU 逐像素画按键）。
+     * 源必须已换序成 native（PPA 用 byte_swap 处理大端在真机上未被验证过 ⇒ 不冒险）。 */
+    if (claw4_ppa &&
+        (size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX &&
+        ((uintptr_t)src_block & 127u) == 0 && ((uintptr_t)claw4_fb & 127u) == 0)
+    {
+        ppa_srm_oper_config_t pcfg = {
+            .in = {
+                .buffer = (void *)src_block,
+                .pic_w = (uint32_t)claw4_win_width, .pic_h = (uint32_t)rows,
+                .block_offset_x = 0, .block_offset_y = 0,
+                .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+            },
+            .out = {
+                .buffer = (void *)claw4_fb,
+                .buffer_size = (uint32_t)claw4_fb_bytes,     /* ★ 漏给这条 = err 0x102 */
+                .pic_w = (uint32_t)CLAW4_PHYS_W, .pic_h = (uint32_t)CLAW4_PHYS_H,
+                .block_offset_x = (uint32_t)claw4_win_left, .block_offset_y = (uint32_t)claw4_win_top,
+                .srm_cm = PPA_SRM_COLOR_MODE_RGB888,
+            },
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+            .scale_x = 1.0f, .scale_y = 1.0f,
+            .mirror_x = false, .mirror_y = false,
+            .rgb_swap = (bool)CLAW4_PPA_RGB_SWAP,
+            .byte_swap = !src_native,   /* 源是大端 565 ⇒ 硬件换序（自检会判对错） */
+            .mode = PPA_TRANS_MODE_BLOCKING,
+        };
+        /* PPA 绕过 CPU cache 直写 PSRAM ⇒ 先失效目的区间，否则 CPU 里的陈旧行稍后回写会覆盖它 */
+        {
+            const size_t o0 = (size_t)((uintptr_t)dst - (uintptr_t)claw4_fb) & ~(size_t)127;
+            const size_t o1 = ((size_t)((uintptr_t)dst - (uintptr_t)claw4_fb) +
+                               (size_t)(rows - 1) * CLAW4_PHYS_W * 3 +
+                               (size_t)claw4_win_width * 3 + 127) & ~(size_t)127;
+            const size_t oe = o1 > (size_t)claw4_fb_bytes ? (size_t)claw4_fb_bytes : o1;
+            if (oe > o0)
+                esp_cache_msync((void *)((uintptr_t)claw4_fb + o0), oe - o0, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+        }
+        const int64_t t_ppa0 = esp_timer_get_time();
+        const esp_err_t perr = ppa_do_scale_rotate_mirror(claw4_ppa, &pcfg);
+        const int64_t dt_ppa = esp_timer_get_time() - t_ppa0;
+        claw4_pf_xpose += (uint64_t)dt_ppa;                 /* 记进 xpose 段：与 CPU 版可比 */
+        claw4_pf_ppa_us += (uint64_t)dt_ppa;
+        claw4_pf_ppa_ops++;
+        if (perr != ESP_OK)
+        {
+            claw4_pf_ppa_err++;
+            if (claw4_pf_ppa_err < 4)
+                RG_LOGE("claw4: PPA convert failed: %s (w=%d rows=%d y=%d)\n",
+                        esp_err_to_name(perr), claw4_win_width, rows, claw4_win_top);
+        }
+        claw4_pf_msync_done = true;      /* PPA 直写 PSRAM，不经 CPU cache ⇒ 后面跳过 msync */
+    }
+    else
+#endif
+    {
     for (int r = 0; r < rows; ++r)
     {
         const uint16_t *src_row = src_block + (size_t)r * claw4_win_width;
         uint8_t *dst_row = dst + (size_t)r * CLAW4_PHYS_W * 3;
-        for (int x = 0; x < claw4_win_width; ++x)
+        int x = 0;
+#if CLAW4_XPOSE_WORDS
+        if (dst_aligned)
+        {
+            claw4_u32a *w = (claw4_u32a *)dst_row;
+            for (; x + 4 <= claw4_win_width; x += 4)
+            {
+                const uint16_t a = src_native ? src_row[x]     : claw4_swap16(src_row[x]);
+                const uint16_t b = src_native ? src_row[x + 1] : claw4_swap16(src_row[x + 1]);
+                const uint16_t c = src_native ? src_row[x + 2] : claw4_swap16(src_row[x + 2]);
+                const uint16_t e = src_native ? src_row[x + 3] : claw4_swap16(src_row[x + 3]);
+                claw4_expand4(w, a, b, c, e);
+                w += 3;
+            }
+        }
+#endif
+        for (; x < claw4_win_width; ++x)
             claw4_put_pixel888(dst_row + x * 3,
                                src_native ? src_row[x] : claw4_swap16(src_row[x]));
     }
+#if CLAW4_XPOSE_SELFCHECK
+    /* 新旧两条路径逐字节比对（前 8 个块 × 前 4 行 × 前 64 像素）——机器判红蓝互换。 */
+    if (claw4_pf_selfcheck < 8)
+    {
+        uint32_t bad = 0;
+        const int nw = claw4_win_width < 64 ? claw4_win_width : 64;
+        const int nr = rows < 4 ? rows : 4;
+        for (int r = 0; r < nr; ++r)
+        {
+            const uint16_t *src_row = src_block + (size_t)r * claw4_win_width;
+            const uint8_t *dr = dst + (size_t)r * CLAW4_PHYS_W * 3;
+            for (int x = 0; x < nw; ++x)
+            {
+                uint8_t ref[3];
+                claw4_put_pixel888(ref, src_native ? src_row[x] : claw4_swap16(src_row[x]));
+                if (ref[0] != dr[x * 3] || ref[1] != dr[x * 3 + 1] || ref[2] != dr[x * 3 + 2])
+                    bad++;
+            }
+        }
+        RG_LOGI("claw4-PERF: xpose selfcheck #%u bad=%u (w=%d rows=%d left=%d aligned=%d band=%d native=%d)\n",
+                (unsigned)claw4_pf_selfcheck, (unsigned)bad, claw4_win_width, rows, claw4_win_left,
+                (int)dst_aligned, (int)band_block, (int)src_native);
+        claw4_pf_selfcheck++;
+    }
+#endif
+    claw4_pf_xpose += (uint64_t)(esp_timer_get_time() - pf_t0);
+    pf_t0 = esp_timer_get_time();
+    }   /* ← PPA 分支的 else 块结束 */
+    if (claw4_pf_msync_done) { claw4_pf_msync_done = false; goto claw4_skip_msync; }
 
     /* cache 写回：msync 要求偏移与长度都是 **128 字节的整数倍**，否则静默失败。
      * 窗口偏移不保证对齐（720px 行 = 1440B，1440%128=32）⇒ 向外扩到 128B 边界，
@@ -742,6 +1030,8 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
     if (end > (size_t)claw4_fb_bytes)
         end = (size_t)claw4_fb_bytes;
     esp_cache_msync((void *)((uintptr_t)claw4_fb + start), end - start, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    claw4_pf_msync += (uint64_t)(esp_timer_get_time() - pf_t0);
+claw4_skip_msync:;
 
 #if CLAW4_DIAG_MARKERS
     if (claw4_diag_tag_pixels)
@@ -761,4 +1051,10 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
      * 最后一块覆盖前面的 ⇒ launcher 界面永远出不来（只有直写路径的沙漏能看见）。
      * 语义与 Tab5 驱动 mipi_dsi_tab5.h:1165 一字不差，别删。 */
     claw4_win_top += rows;
+
+    claw4_pf_total += (uint64_t)(esp_timer_get_time() - pf_all0);
+    claw4_pf_blocks++;
+    claw4_pf_px += (uint32_t)rows * (uint32_t)claw4_win_width;
+    claw4_pf_report();
+    (void)pf_ovl_ran;
 }

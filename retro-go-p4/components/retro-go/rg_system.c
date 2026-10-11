@@ -13,7 +13,7 @@ extern void rg_display_invalidate_lines(int top, int count);
  * 置 1 → 把 frameskip 钉死在 0（模拟器每帧都渲染 = 60fps），自动跳帧策略整段让位。
  * 用途：测"关掉跳帧"时的真实开销。默认关，是因为它会让慢游戏失去自动降帧保护。
  * 判读方法见 Auto frameskip 那段注释。 */
-#define RG_PERF_PIN_FRAMESKIP 0
+#define RG_PERF_PIN_FRAMESKIP 0   /* 测量用：本轮临时置 1，量完改回 0 */
 
 #include <sys/time.h>
 #include <stdarg.h>

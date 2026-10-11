@@ -1,3 +1,5 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <rg_system.h>
 #include <sys/time.h>
 #include <stdarg.h>
@@ -542,7 +544,10 @@ static void about_handler(rg_gui_option_t *dest)
     *dest++ = (rg_gui_option_t)RG_DIALOG_END;
 }
 
-#if defined(RG_GBA_DIAG) && RG_GBA_DIAG && !defined(RG_TARGET_SDL2)
+/* RG_TEST_BOOTROM：无人值守测量专用（扫 ROM 目录直接进游戏）。
+ * 与 RG_GBA_DIAG 分开是有意的 —— 后者还连带打开脚本按键/诊断刷屏，会换掉负载。
+ * 未定义该宏的 target（如 Tab5）走到的分支与改动前逐字相同。 */
+#if ((defined(RG_GBA_DIAG) && RG_GBA_DIAG) || (defined(RG_TEST_BOOTROM) && RG_TEST_BOOTROM)) && !defined(RG_TARGET_SDL2)
 /* 2026-10-06 临时：无人值守真机测试 —— 启动器直接启动一个 ROM。
  * 为什么需要：真机上没人点屏幕，而"选 app(gbsp) → 再选 ROM"要两次输入；
  * 直接 rg_system_switch_app 一步进游戏，之后按键时间轴才有意义。验证完删除。 */
@@ -558,9 +563,18 @@ static int rg_test_boot_rom_cb(const rg_scandir_t *entry, void *arg)
 static void rg_test_auto_boot_rom(void)
 {
     const char *cands[] = { RG_BASE_PATH_ROMS "/gba/恶魔城系列（3作）", RG_BASE_PATH_ROMS "/gba" };
-    for (size_t i = 0; i < RG_COUNT(cands) && !rg_test_boot_rom[0]; ++i)
-        rg_storage_scandir(cands[i], rg_test_boot_rom_cb, NULL, RG_SCANDIR_RECURSIVE);
-    RG_LOGW("RG_TEST_BOOTROM: %s\n", rg_test_boot_rom[0] ? rg_test_boot_rom : "(none)");
+    /* 2026-10-11：**必须等 SD/存储栈稳定**再交接。实测"开机后立刻 switch_app"时核心侧
+     * 会 `Failed to create on-chip LDO power control driver (chan 4)`（SD 供电 LDO），
+     * /sd 读不了 ⇒ 核心起不来、卡在沙漏。手动点游戏是同一套 warm handoff，只是中间隔了
+     * 十几秒（SD 空闲）⇒ 这里改成"扫到 ROM 才走"，最多等 ~8 秒。 */
+    int tries = 0;
+    while (!rg_test_boot_rom[0] && tries < 40)
+    {
+        for (size_t i = 0; i < RG_COUNT(cands) && !rg_test_boot_rom[0]; ++i)
+            rg_storage_scandir(cands[i], rg_test_boot_rom_cb, NULL, RG_SCANDIR_RECURSIVE);
+        if (!rg_test_boot_rom[0]) { vTaskDelay(pdMS_TO_TICKS(200)); tries++; }
+    }
+    RG_LOGW("RG_TEST_BOOTROM: %s (等 %d ms)\n", rg_test_boot_rom[0] ? rg_test_boot_rom : "(none)", tries * 200);
     if (rg_test_boot_rom[0])
         rg_system_switch_app("gbsp", "gba", rg_test_boot_rom, 0);
 }
@@ -631,7 +645,10 @@ void app_main(void)
     heap_caps_malloc_extmem_enable(1024);
 #endif
 
-#if defined(RG_GBA_DIAG) && RG_GBA_DIAG && !defined(RG_TARGET_SDL2)
+/* RG_TEST_BOOTROM：无人值守测量专用（扫 ROM 目录直接进游戏）。
+ * 与 RG_GBA_DIAG 分开是有意的 —— 后者还连带打开脚本按键/诊断刷屏，会换掉负载。
+ * 未定义该宏的 target（如 Tab5）走到的分支与改动前逐字相同。 */
+#if ((defined(RG_GBA_DIAG) && RG_GBA_DIAG) || (defined(RG_TEST_BOOTROM) && RG_TEST_BOOTROM)) && !defined(RG_TARGET_SDL2)
     rg_test_auto_boot_rom();   /* 测试钩子：直接进游戏，跳过 ROM 选择界面 */
 #endif
 

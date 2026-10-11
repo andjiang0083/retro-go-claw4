@@ -1771,6 +1771,42 @@ void rg_overlay_blit_cw90(uint16_t *buf, int stride, int rx, int ry, int rw, int
 
 /* 竖屏线性版（tab5p 分支）：逻辑坐标 = 物理坐标，不做 90° 换算。
  * 与 cw90 版共用同一份绘制代码，只是 cw90=false。 */
+bool rg_overlay_rows_dirty(int y0, int y1)
+{
+    int a0, b0, a1, b1;
+    /* 开关：无论 visible / ready 都会画 */
+    rg_overlay_get_toggle_rect(&a0, &b0, &a1, &b1);
+    if (b0 < y1 && b1 > y0)
+        return true;
+    if (!(visible && ready))
+        return false;
+    for (size_t i = 0; i < btn_count; ++i)
+    {
+        const rg_overlay_btn_t *b = &btns[i];
+        if (!b->mask || b->h <= 0)
+            continue;
+        if (b->y < y1 && b->y + b->h > y0)
+            return true;
+    }
+    rg_overlay_get_swap_rect(&a0, &b0, &a1, &b1);
+    if (b1 > 0 && b0 < y1 && b1 > y0)
+        return true;
+#if RG_OVERLAY_SHOW_FPS
+    if (fps_value >= 0 && fps_text[0])
+    {
+        const int ly = RG_FPS_TEXT_CY - 8 * RG_FPS_SCALE / 2;
+        if (ly < y1 && ly + 8 * RG_FPS_SCALE > y0)
+            return true;
+    }
+#endif
+#if RG_BATT_LED_ENABLE
+    rg_batt_led_get_band(&a0, &b0, &a1, &b1);
+    if (b0 < y1 && b1 > y0)
+        return true;
+#endif
+    return false;
+}
+
 void rg_overlay_blit_linear(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w)
 {
     rg_overlay_try_panel();
