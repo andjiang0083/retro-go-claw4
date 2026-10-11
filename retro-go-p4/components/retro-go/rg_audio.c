@@ -227,7 +227,19 @@ int rg_audio_get_volume(void)
 
 void rg_audio_set_volume(int percent)
 {
-    RG_ASSERT(audio.driver != NULL, "Audio device not ready!");
+    /* claw4：音频尚未接入（sink=Dummy / 已 deinit），而 GUI 对话框（rg_gui.c）和退出到启动器
+     * 的路径仍会调这三个函数 ⇒ 断言会把「按菜单键退出」变成 panic→重启→自动进游戏的循环。
+     * 未就绪时安静忽略：对已就绪的情形（Tab5 等）行为完全不变（原本断言恒真）。 */
+    if (audio.driver == NULL)
+    {
+        static bool claw4_audio_warned;
+        if (!claw4_audio_warned)
+        {
+            claw4_audio_warned = true;
+            RG_LOGW("rg_audio: 未就绪（音频未实现或已 deinit），忽略本次音量/静音/采样率调用\n");
+        }
+        return;
+    }
     audio.volume = RG_MIN(RG_MAX(percent, 0), 100);
     if (audio.driver->set_volume)
         audio.driver->set_volume(audio.volume);
@@ -242,7 +254,19 @@ bool rg_audio_get_mute(void)
 
 void rg_audio_set_mute(bool mute)
 {
-    RG_ASSERT(audio.driver != NULL, "Audio device not ready!");
+    /* claw4：音频尚未接入（sink=Dummy / 已 deinit），而 GUI 对话框（rg_gui.c）和退出到启动器
+     * 的路径仍会调这三个函数 ⇒ 断言会把「按菜单键退出」变成 panic→重启→自动进游戏的循环。
+     * 未就绪时安静忽略：对已就绪的情形（Tab5 等）行为完全不变（原本断言恒真）。 */
+    if (audio.driver == NULL)
+    {
+        static bool claw4_audio_warned;
+        if (!claw4_audio_warned)
+        {
+            claw4_audio_warned = true;
+            RG_LOGW("rg_audio: 未就绪（音频未实现或已 deinit），忽略本次音量/静音/采样率调用\n");
+        }
+        return;
+    }
 
     if (!ACQUIRE_DEVICE(1000))
         return;
@@ -261,7 +285,19 @@ int rg_audio_get_sample_rate(void)
 
 void rg_audio_set_sample_rate(int sampleRate)
 {
-    RG_ASSERT(audio.driver != NULL, "Audio device not ready!");
+    /* claw4：音频尚未接入（sink=Dummy / 已 deinit），而 GUI 对话框（rg_gui.c）和退出到启动器
+     * 的路径仍会调这三个函数 ⇒ 断言会把「按菜单键退出」变成 panic→重启→自动进游戏的循环。
+     * 未就绪时安静忽略：对已就绪的情形（Tab5 等）行为完全不变（原本断言恒真）。 */
+    if (audio.driver == NULL)
+    {
+        static bool claw4_audio_warned;
+        if (!claw4_audio_warned)
+        {
+            claw4_audio_warned = true;
+            RG_LOGW("rg_audio: 未就绪（音频未实现或已 deinit），忽略本次音量/静音/采样率调用\n");
+        }
+        return;
+    }
 
     if (audio.sampleRate == sampleRate)
         return;
