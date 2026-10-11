@@ -7,6 +7,7 @@
 #include <math.h>
 
 #ifdef ESP_PLATFORM
+#include "esp_timer.h"        /* 振动马达关断（RG_VIBRATE_GPIO） */
 #include <driver/gpio.h>
 #include <driver/adc.h>
 // This is a lazy way to silence deprecation notices on some esp-idf versions...
@@ -46,6 +47,10 @@ static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
 #endif
 #ifdef ESP_PLATFORM
 #include "esp_lcd_touch.h"
+#if defined(RG_TARGET_CLAW4)
+#include "esp_lcd_touch_gt911.h"      /* claw4 的触摸 IC = GT911（厂商面板同款） */
+#include "driver/i2c_master.h"        /* 复用显示驱动建好的 I2C 总线（TCA9555 同一条） */
+#endif
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch_st7123.h"
 #endif
@@ -74,17 +79,40 @@ static size_t keymap_touch_count;
 _Static_assert(RG_COUNT(keymap_touch_main) <= RG_COUNT(keymap_touch) &&
                RG_COUNT(keymap_touch_alt) <= RG_COUNT(keymap_touch),
                "keymap_touch 容量不够：touch_layout.h 加键了要一起把 16 调大");
+/* 两张表条数是否必须相等：Tab5 是（同批键的两个方向），claw4 不是（两种机型布局 13/11 键）
+ * ⇒ 用 RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS 放行，搬表时按**选中的那张**自己的条数。 */
+#ifndef RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS
 _Static_assert(RG_COUNT(keymap_touch_main) == RG_COUNT(keymap_touch_alt),
                "两张键位表条数必须一致（rg_input.c 按同一个 count 搬表）");
+#endif
 
-/* 按当前方向把该用的那张搬进来（幂等；方向在显示初始化时已锁定 ⇒ 只可能选到一张）。 */
+/* 选表判据：默认 = "按运行时方向"（Tab5 双方向，逐字不变）。
+ * target 可覆盖（claw4 方屏无方向，两张表 = 两种机型布局 ⇒ 按当前机型选）。 */
+#ifndef RG_TOUCH_KEYMAP_USE_ALT
+#define RG_TOUCH_KEYMAP_USE_ALT() (rg_orient_active() == RG_ORIENT_LANDSCAPE)
+#endif
+
+/* claw4：主表 = SNES 版（13 键）、备表 = GBA 版（11 键）。
+ * 判据 = 当前核心机型 id（app->configNs，与叠加层铭牌/配色同源）：有 X/Y 的机型（snes）
+ * 用主表；其余（gba/gb/gbc/nes…）用备表 —— 它们都没有 X/Y，L/R 落在菱形位上才顺手
+ * （用户 2026-10-11 定稿：GBA 版 L 占 Y 位、R 占 X 位）。 */
+#if defined(RG_TARGET_CLAW4)
+static bool rg_claw4_use_gba_layout(void)
+{
+    rg_app_t *app = rg_system_get_app();
+    const char *ns = (app && app->configNs) ? app->configNs : "";
+    return strcmp(ns, "snes") != 0;
+}
+#endif
+
+/* 把该用的那张搬进来（幂等）。搬完再也不改 ⇒ 必须在"核心机型已确定"之后第一次调用。 */
 static void touch_keymap_ensure(void)
 {
     if (keymap_touch_count)
         return;
-    const rg_keymap_touch_t *src = (rg_orient_active() == RG_ORIENT_LANDSCAPE)
-                                       ? keymap_touch_alt : keymap_touch_main;
-    keymap_touch_count = RG_COUNT(keymap_touch_main);
+    const bool use_alt = RG_TOUCH_KEYMAP_USE_ALT();
+    const rg_keymap_touch_t *src = use_alt ? keymap_touch_alt : keymap_touch_main;
+    keymap_touch_count = use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main);
     memcpy(keymap_touch, src, keymap_touch_count * sizeof(rg_keymap_touch_t));
 }
 #else
@@ -118,6 +146,104 @@ extern i2c_master_bus_handle_t bsp_i2c_get_handle(void);
 /* 照抄 BSP 的 ST7123 触摸初始化（bsp_display_indev_init_to_st7123）：
  * 一体化屏的触摸 IC 就是 ST7123，I2C 地址 0x55，x_max/y_max 用面板物理尺寸。
  * 注意 BSP 只对外暴露了 GT911 版本的 bsp_touch_new()，所以这里自己建 panel io。 */
+/* ── 振动马达（claw4 GPIO22，高有效）────────────────────────────────────────
+ * 虚拟键是"没有行程"的按键，触感反馈全靠这一下。用一次性 esp_timer 关断：
+ * 不能在输入任务里 vTaskDelay（会把按键轮询卡停 30ms，手感更差）。 */
+#if defined(RG_VIBRATE_GPIO)
+#ifndef RG_VIBRATE_MS
+#define RG_VIBRATE_MS 30
+#endif
+static esp_timer_handle_t vibrate_timer = NULL;
+static void vibrate_off_cb(void *arg) { (void)arg; gpio_set_level(RG_VIBRATE_GPIO, 0); }
+static void rg_vibrate_pulse(void)
+{
+    if (!vibrate_timer)
+    {
+        const gpio_config_t io = {
+            .pin_bit_mask = 1ULL << RG_VIBRATE_GPIO,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&io);
+        const esp_timer_create_args_t targs = {.callback = vibrate_off_cb, .name = "vib-off"};
+        if (esp_timer_create(&targs, &vibrate_timer) != ESP_OK)
+        {
+            vibrate_timer = NULL;
+            return;
+        }
+    }
+    gpio_set_level(RG_VIBRATE_GPIO, 1);
+    esp_timer_stop(vibrate_timer);          /* 连击时重新计时，不叠加 */
+    esp_timer_start_once(vibrate_timer, (uint64_t)RG_VIBRATE_MS * 1000);
+}
+#else
+static void rg_vibrate_pulse(void) {}
+#endif
+
+#if defined(RG_TARGET_CLAW4)
+/* Metalio Claw4 的触摸 IC = **GT911**。参数照官方板级源码
+ * （official/main/boards/metalio-claw-4/metalio-claw-4.cc → InitializeTouch）：
+ *   · I2C 地址先探测 0x5D，失败再试 0x14；
+ *   · 不接 RST（GPIO_NUM_NC）；INT = GPIO33，**低有效**；
+ *   · 200kHz（与电量计 BQ27220 同总线；官方注释：400k 在总线抖动时更容易 clear-bus 失败）；
+ *   · x_max/y_max = 720（方屏）。
+ * ⚠ I2C 控制器**复用显示驱动建好的那条**（claw4_get_i2c_bus）—— 官方板级注释：
+ *   两个 I2C 外设会抢总线，GT911 与 TCA9555 会一起通信失败。 */
+extern i2c_master_bus_handle_t claw4_get_i2c_bus(void);
+static esp_err_t rg_touch_init(void)
+{
+    i2c_master_bus_handle_t bus = claw4_get_i2c_bus();
+    if (!bus)
+        return ESP_ERR_INVALID_STATE;
+
+    uint8_t dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
+    if (i2c_master_probe(bus, dev_addr, 100) != ESP_OK)
+    {
+        if (i2c_master_probe(bus, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, 100) == ESP_OK)
+        {
+            dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+            RG_LOGI("claw4: GT911 在备用地址 0x%02X\n", dev_addr);
+        }
+        else
+        {
+            RG_LOGW("claw4: GT911 无应答（0x%02X/0x%02X），触摸不可用\n",
+                    ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP);
+            return ESP_ERR_NOT_FOUND;
+        }
+    }
+
+    esp_lcd_panel_io_handle_t io = NULL;
+    esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = dev_addr,
+        .control_phase_bytes = 1,
+        .dc_bit_offset = 0,
+        .lcd_cmd_bits = 16,
+        .flags = {.disable_control_phase = 1},
+    };
+    io_config.scl_speed_hz = 200000;
+    esp_err_t err = esp_lcd_new_panel_io_i2c_v2(bus, &io_config, &io);
+    if (err != ESP_OK)
+        return err;
+
+    const esp_lcd_touch_config_t tp_config = {
+        .x_max = RG_TOUCH_PHYS_W,
+        .y_max = RG_TOUCH_PHYS_H,
+        .rst_gpio_num = -1,          /* 板上未接 */
+        .int_gpio_num = 33,
+        .levels = { .reset = 0, .interrupt = 0 },   /* INT 低有效 */
+        .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+    };
+    err = esp_lcd_touch_new_i2c_gt911(io, &tp_config, &touch_handle);
+    if (err != ESP_OK || touch_handle == NULL)
+    {
+        esp_lcd_panel_io_del(io);
+        touch_handle = NULL;
+        return err != ESP_OK ? err : ESP_FAIL;
+    }
+    RG_LOGI("claw4: GT911 就绪 @0x%02X (INT 33, 200kHz)\n", dev_addr);
+    return ESP_OK;
+}
+#else
+/* ── Tab5：ST7123（一体化屏的触摸 IC）────────────────────────────────────── */
 static esp_err_t rg_touch_init(void)
 {
     esp_err_t err = bsp_i2c_init();
@@ -155,6 +281,7 @@ static esp_err_t rg_touch_init(void)
     }
     return ESP_OK;
 }
+#endif /* RG_TARGET_CLAW4 */
 
 /* 触摸懒加载 + 重试：
  * Tab5 的 TP_RST 由 I2C 上的 IO 扩展器控制，而扩展器是在**显示初始化**里才被初始化的
@@ -649,6 +776,16 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
         if (esp_lcd_touch_get_coordinates(touch_handle, px, py, NULL, &count, CONFIG_ESP_LCD_TOUCH_MAX_POINTS))
         {
             any_touch = (count > 0);
+#if defined(RG_VIBRATE_GPIO)
+            /* 触感反馈：无触点 → 有触点的那一拍给一次短脉冲（连击重新计时）。 */
+            static bool was_touching = false;
+            if (any_touch != was_touching)
+            {
+                if (any_touch)
+                    rg_vibrate_pulse();
+                was_touching = any_touch;
+            }
+#endif
 #if RG_TOUCH_OVERLAY
             /* "看得见"和"点得到"必须同源，两个条件都要满足：
              *   ① 用户没关掉按键（visible）—— 否则黑边上一按就触发，用户以为触摸坏了；
@@ -697,6 +834,21 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
             /* 手指离开方向键区（或整体抬指）→ 清掉滞回状态，下次按下按"进入"门槛判 */
             if (!dpad_touched)
                 rg_dpad_reset();
+
+#if defined(RG_TARGET_CLAW4)
+            /* ⚠ 临时探针（P2 幽灵触点定位用，定位完删）：看 GT911 到底报了什么点、
+             * 又映射成了哪些键。限速 2 次/秒，只在"有触点上报"的拍子打。 */
+            {
+                static int64_t probe_last = 0;
+                const int64_t now_us = esp_timer_get_time();
+                if (now_us - probe_last > 500000)
+                {
+                    probe_last = now_us;
+                    RG_LOGI("claw4-probe: count=%u px0=%d py0=%d state=0x%08x\n",
+                            (unsigned)count, (int)px[0], (int)py[0], (unsigned)state);
+                }
+            }
+#endif
 
 #if RG_TOUCH_OVERLAY
             /* ── X/Y ↔ L/R 调换按钮（L/R 中间那颗）─────────────────────────────

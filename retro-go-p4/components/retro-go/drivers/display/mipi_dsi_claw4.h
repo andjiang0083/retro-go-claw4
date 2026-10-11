@@ -40,6 +40,8 @@
 #include "driver/ledc.h"           /* 背光 PWM */
 #include "driver/i2c_master.h"     /* TCA9555（SD 卡槽供电使能） */
 #include "esp_lcd_nv3051f.h"       /* 厂商面板驱动（组件根目录，第三方 vendor 代码） */
+#include "esp_heap_caps.h"         /* 电量灯影子缓冲（PSRAM） */
+#include "rg_touch_overlay.h"      /* 虚拟按键可视层（共享模块；本 target 已定义键位表） */
 
 /* ──────────────────────────── 硬件常量（厂商 config.h / 板级源码）──────────── */
 #define CLAW4_PHYS_W            720        /* 面板物理宽（= 逻辑宽，无旋转） */
@@ -119,8 +121,29 @@ static int claw4_fb_bytes = 0;
 /* 收集逻辑行用；长度必须编译期 ⇒ 按 geom.h 的 LCD_BUFFER_LENGTH_MAX 分配（720×32）。
  * 64 字节对齐：msync 只按 128B 对齐切分，但源缓冲对齐能让 memcpy 走向量路径。 */
 static uint16_t claw4_line_buffer[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(64)));
+/* 叠加层合成暂存块（565 原生，**块内相对**索引）：rg_display 交来的是大端，
+ * 共享叠加层模块只认原生 565 ⇒ 先还原进这里、画完按键再转 888。
+ * 大小 = LCD_BUFFER_LENGTH_MAX（与 line_buffer 同量级，片内 RAM 合计约 92KB）。 */
+static uint16_t claw4_ovl_scratch[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(64)));
 static int claw4_win_left = 0, claw4_win_top = 0, claw4_win_width = 0;
 static bool claw4_backlight_ready = false;
+
+/* 565 → 面板 888 的一像素落盘。内存序 B,G,R 与 IDF/LVGL RGB888 一致（开关见 CLAW4_RGB888_BGR）。
+ * **主写路径与电量灯路径共用这一份** —— 两处各写一遍必然漂移（红蓝互换只会在其中一处出现）。 */
+static inline void claw4_put_pixel888(uint8_t *d, uint16_t v)
+{
+    const uint8_t r5 = (uint8_t)((v >> 11) & 0x1F);
+    const uint8_t g6 = (uint8_t)((v >> 5) & 0x3F);
+    const uint8_t b5 = (uint8_t)(v & 0x1F);
+    const uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
+    const uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
+    const uint8_t b8 = (uint8_t)((b5 << 3) | (b5 >> 2));
+#if CLAW4_RGB888_BGR
+    d[0] = b8; d[1] = g8; d[2] = r8;
+#else
+    d[0] = r8; d[1] = g8; d[2] = b8;
+#endif
+}
 
 static inline uint16_t claw4_swap16(uint16_t v)
 {
@@ -163,9 +186,15 @@ static void claw4_backlight_init(void)
 /* 为什么放在显示驱动里做：厂商板级初始化顺序就是"I2C → 扩展器 → 屏"，而且
  * 卡槽供电不依赖显示，早做一步让 rg_storage 挂载时卡已经上电。
  * ⚠ **失败只告警**：本轮是点屏验证，SD 出问题不该把屏一起拖黑。 */
-static void claw4_sd_power_enable(void)
+/* I2C 总线句柄（进程内唯一）：TCA9555 / 电量计 / GT911 触摸都挂在同一条总线上。
+ * ⚠ 官方 demo 的板级注释：GT911 与 TCA9555 若各建各的 I2C 外设会**抢总线** ⇒ 通信失败。
+ * 所以总线只在这里建一次，触摸初始化（rg_input.c）通过 claw4_get_i2c_bus() 复用。 */
+static i2c_master_bus_handle_t claw4_i2c_bus = NULL;
+
+i2c_master_bus_handle_t claw4_get_i2c_bus(void)
 {
-    i2c_master_bus_handle_t bus = NULL;
+    if (claw4_i2c_bus)
+        return claw4_i2c_bus;
     const i2c_master_bus_config_t bus_cfg = {
         .i2c_port = CLAW4_I2C_PORT,
         .sda_io_num = CLAW4_PIN_I2C_SDA,
@@ -174,7 +203,15 @@ static void claw4_sd_power_enable(void)
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    if (i2c_new_master_bus(&bus_cfg, &bus) != ESP_OK || !bus)
+    if (i2c_new_master_bus(&bus_cfg, &claw4_i2c_bus) != ESP_OK)
+        claw4_i2c_bus = NULL;
+    return claw4_i2c_bus;
+}
+
+static void claw4_sd_power_enable(void)
+{
+    i2c_master_bus_handle_t bus = claw4_get_i2c_bus();
+    if (!bus)
     {
         RG_LOGW("claw4: i2c bus init failed (SD 可能不可用；不影响显示)\n");
         return;
@@ -328,6 +365,100 @@ static esp_timer_handle_t claw4_diag_rep_timer = NULL;
 static esp_timer_handle_t claw4_diag_timer = NULL;
 #endif /* CLAW4_DIAG_MARKERS */
 
+#ifndef RG_BATT_LED_ENABLE
+/* 电量圆灯总开关（默认 1 = 原有行为）。claw4 在电量计（BQ27220）接上之前置 0：
+ * 没数据会被当成 0% —— 既画错灯（红闪），又会把整条灯带擦成背景色 ⇒ 按键下方留一条黑带。 */
+#define RG_BATT_LED_ENABLE 1
+#endif
+
+#if RG_OVERLAY_ENABLED && RG_BATT_LED_ENABLE
+/* ── 电量圆灯（控制带里那颗）───────────────────────────────────────────────
+ * 为什么必须由驱动直接画：灯在**控制带**（claw4 逻辑 y=692），而显示层只推视口（游戏区
+ * y<480），叠加层与边框面板的推帧都刷不到它 —— 与 Tab5 的结论一致（见 rg_touch_overlay.h
+ * 的 rg_batt_led_* 说明）。
+ * 与 Tab5 的差别：Tab5 帧缓冲是 565，直接往 fb 上画；claw4 帧缓冲是 888 ⇒
+ *   ① 灯画进一块 565 影子缓冲。高度按**绝对行号**开：rg_batt_led_draw() 内部用 (ly,lx)
+ *      直接寻址，所以宁可多占 PSRAM，也不做"指针前移 by0 行"那种越界技巧（可读性优先）。
+ *   ② 只把条带那几行 565→888 转进帧缓冲（复用主路径的 claw4_put_pixel888，防两处口径漂移）。 */
+static uint16_t *claw4_led_shadow = NULL;
+static esp_timer_handle_t claw4_led_timer = NULL;
+static int64_t claw4_led_last_write = 0;
+static uint8_t *claw4_led_last_fb = NULL;
+
+/* 本块是否压到灯条带（灯在左下角、x 很窄，只判 y 足够） */
+static bool claw4_led_overlaps(int top, int rows)
+{
+    int x0, y0, x1, y1;
+    rg_batt_led_get_band(&x0, &y0, &x1, &y1);
+    return (top < y1) && (top + rows > y0);
+}
+
+static void claw4_batt_led_refresh(bool force)
+{
+    if (!claw4_fb)
+        return;
+    const int64_t now = esp_timer_get_time();
+    /* 换了帧缓冲（进出 app 会重挂显示）或超 5s 强制重画：否则"静止的灯"可能一直不刷新 */
+    const bool stale = (claw4_fb != claw4_led_last_fb) || (now - claw4_led_last_write > 5000000);
+    if (!force && !stale && !rg_batt_led_refresh_needed())
+        return;
+    claw4_led_last_fb = claw4_fb;
+    claw4_led_last_write = now;
+
+    int bx0, by0, bx1, by1;
+    rg_batt_led_get_band(&bx0, &by0, &bx1, &by1);
+    if (bx0 < 0) bx0 = 0;
+    if (by0 < 0) by0 = 0;
+    if (bx1 > CLAW4_PHYS_W) bx1 = CLAW4_PHYS_W;
+    if (by1 > CLAW4_PHYS_H) by1 = CLAW4_PHYS_H;
+    if (bx0 >= bx1 || by0 >= by1)
+        return;
+
+    if (!claw4_led_shadow)
+    {
+        claw4_led_shadow = (uint16_t *)heap_caps_malloc((size_t)CLAW4_PHYS_H * CLAW4_PHYS_W * 2,
+                                                        MALLOC_CAP_SPIRAM);
+        if (!claw4_led_shadow)
+        {
+            RG_LOGW("claw4: 电量灯影子缓冲申请失败（灯不显示，其余不受影响）\n");
+            return;
+        }
+    }
+
+    /* 条带先擦成**皮肤底色**（不是纯黑：非黑面板上会割裂画面，Tab5 真机反馈过的坑） */
+    const uint16_t bg = rg_batt_led_band_bg();
+    for (int y = by0; y < by1; ++y)
+    {
+        uint16_t *row = claw4_led_shadow + (size_t)y * CLAW4_PHYS_W;
+        for (int x = bx0; x < bx1; ++x)
+            row[x] = bg;
+    }
+    rg_batt_led_draw(claw4_led_shadow, CLAW4_PHYS_W);   /* 线性映射：逻辑 = 面板 */
+
+    for (int y = by0; y < by1; ++y)
+    {
+        const uint16_t *s = claw4_led_shadow + (size_t)y * CLAW4_PHYS_W + bx0;
+        uint8_t *d = claw4_fb + ((size_t)y * CLAW4_PHYS_W + bx0) * 3;
+        for (int x = 0, n = bx1 - bx0; x < n; ++x, d += 3)
+            claw4_put_pixel888(d, s[x]);
+    }
+    /* 定点写回（msync 要求 128 对齐 ⇒ 向外扩） */
+    const size_t off = ((size_t)by0 * CLAW4_PHYS_W + bx0) * 3;
+    const size_t end = ((size_t)(by1 - 1) * CLAW4_PHYS_W + bx1) * 3;
+    const size_t a0 = off & ~(size_t)127;
+    size_t a1 = (end + 127) & ~(size_t)127;
+    if (a1 > (size_t)claw4_fb_bytes) a1 = (size_t)claw4_fb_bytes;
+    if (a1 > a0)
+        esp_cache_msync((void *)((uintptr_t)claw4_fb + a0), a1 - a0, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
+static void claw4_led_timer_cb(void *arg)
+{
+    (void)arg;
+    claw4_batt_led_refresh(false);
+}
+#endif /* RG_OVERLAY_ENABLED && RG_BATT_LED_ENABLE */
+
 static void lcd_init(void)
 {
     claw4_backlight_init();
@@ -422,7 +553,23 @@ static void lcd_init(void)
 
     RG_SCREEN_INIT();                /* 约定钩子（本 target 为空宏；漏掉=显示驱动永不执行） */
 
+#if RG_OVERLAY_ENABLED
+    /* 虚拟按键预渲染（一次性，约 100ms）：标签/边框/透明度形状在这一步烘成掩码，
+     * 之后每帧只做查表混合。必须等显示起来后建（建层要读键位表/存 NVS）。 */
+    rg_overlay_init();
+#endif
+
     lcd_set_backlight(80);
+
+#if RG_OVERLAY_ENABLED && RG_BATT_LED_ENABLE
+    /* 电量灯刷新（4Hz）：样子没变时 rg_batt_led_refresh_needed() 直接返回 false，几乎零代价。 */
+    if (!claw4_led_timer)
+    {
+        const esp_timer_create_args_t largs = {.callback = claw4_led_timer_cb, .name = "claw4-led"};
+        if (esp_timer_create(&largs, &claw4_led_timer) == ESP_OK)
+            esp_timer_start_periodic(claw4_led_timer, 250000);
+    }
+#endif
 
 #if CLAW4_DIAG_MARKERS
     if (!claw4_diag_timer)
@@ -489,6 +636,7 @@ static inline uint16_t *lcd_get_buffer(size_t length)
     return claw4_line_buffer;
 }
 
+
 /* 把一块**逻辑行**写进面板帧缓冲：逻辑 (lx,ly) = 物理 (lx,ly) ⇒ 直接按行拷贝。
  * length 单位是像素（= 宽度 × 行数），与 rg_display.c 的约定一致；length=0 = 空操作。 */
 static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
@@ -547,30 +695,39 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
      * 字节序 B,G,R：与 IDF RGB888 帧缓冲/LVGL RGB888 的内存布局一致（厂商同款）。
      * 若真机出现红蓝互换 ⇒ 把 CLAW4_RGB888_BGR 改 0（一处开关，别改别处）。
      * 顺序写整行（目标是 PSRAM，随机访问慢），最后整体 msync。 */
+    /* ── 虚拟按键叠加层：必须在**推给面板前**合成 ──────────────────────────────
+     * 为什么放在显示层：GUI 是立即模式，按键画在 GUI 层会被下一次重绘盖掉（实机表现为闪烁）。
+     * 与 Tab5 的差别：共享模块只认 565 原生，而 rg_display 交来的是 565 **大端**
+     *   （Tab5 是 565 帧缓冲，driver 里换个字节序直接画；claw4 是 888）。
+     * 做法：本块先还原成 565 原生进暂存块 → 叠加层画在暂存块上 → 再整体转 888。
+     * 索引是**块内相对**的（与 Tab5 用 tab5_stage 的调用方式一致）。 */
+    const uint16_t *src_block = buffer;
+    bool src_native = false;
+#if RG_OVERLAY_ENABLED
+    if ((size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX)
+    {
+        for (int r = 0; r < rows; ++r)
+        {
+            const uint16_t *s = buffer + (size_t)r * claw4_win_width;
+            uint16_t *d = claw4_ovl_scratch + (size_t)r * claw4_win_width;
+            for (int x = 0; x < claw4_win_width; ++x)
+                d[x] = claw4_swap16(s[x]);
+        }
+        rg_overlay_blit_linear(claw4_ovl_scratch, claw4_win_width, claw4_win_left, claw4_win_top,
+                               claw4_win_width, rows, CLAW4_PHYS_W);
+        src_block = claw4_ovl_scratch;
+        src_native = true;
+    }
+#endif
+
     uint8_t *dst = claw4_fb + ((size_t)claw4_win_top * CLAW4_PHYS_W + claw4_win_left) * 3;
     for (int r = 0; r < rows; ++r)
     {
-        const uint16_t *src_row = buffer + (size_t)r * claw4_win_width;
+        const uint16_t *src_row = src_block + (size_t)r * claw4_win_width;
         uint8_t *dst_row = dst + (size_t)r * CLAW4_PHYS_W * 3;
         for (int x = 0; x < claw4_win_width; ++x)
-        {
-            const uint16_t v = claw4_swap16(src_row[x]);       /* 回到 565 自然取值 */
-            const uint8_t r5 = (uint8_t)((v >> 11) & 0x1F);
-            const uint8_t g6 = (uint8_t)((v >> 5) & 0x3F);
-            const uint8_t b5 = (uint8_t)(v & 0x1F);
-            const uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
-            const uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
-            const uint8_t b8 = (uint8_t)((b5 << 3) | (b5 >> 2));
-#if CLAW4_RGB888_BGR
-            dst_row[x * 3 + 0] = b8;
-            dst_row[x * 3 + 1] = g8;
-            dst_row[x * 3 + 2] = r8;
-#else
-            dst_row[x * 3 + 0] = r8;
-            dst_row[x * 3 + 1] = g8;
-            dst_row[x * 3 + 2] = b8;
-#endif
-        }
+            claw4_put_pixel888(dst_row + x * 3,
+                               src_native ? src_row[x] : claw4_swap16(src_row[x]));
     }
 
     /* cache 写回：msync 要求偏移与长度都是 **128 字节的整数倍**，否则静默失败。
@@ -589,6 +746,12 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
 #if CLAW4_DIAG_MARKERS
     if (claw4_diag_tag_pixels)
         claw4_diag_markers(claw4_win_width >= CLAW4_PHYS_W);
+#endif
+#if RG_OVERLAY_ENABLED && RG_BATT_LED_ENABLE
+    /* 本块压到电量灯条带上 ⇒ 立刻把灯补画回去（否则被面板底图擦掉，要等下一拍定时器）。
+     * 只在相交时做，正常游戏帧（游戏区 y<480）不付这个代价。 */
+    if (claw4_led_overlaps(claw4_win_top, rows))
+        claw4_batt_led_refresh(true);
 #endif
 
     /* ★★ 连续推送时窗口向下推进 ★★

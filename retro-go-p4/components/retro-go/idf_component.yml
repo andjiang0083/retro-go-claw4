@@ -1,0 +1,8 @@
+## 本组件（retro-go）对 managed 组件的依赖。
+## 为什么必须有这个文件：本地组件在 CMakeLists 里写 REQUIRES esp_lcd_touch_gt911 **不会**
+## 把该组件的 include 目录带进来（实测：编译 rg_input.c 时 esp_lcd_touch_gt911.h 找不到），
+## 而 vendors/managed_components 已有一份离线副本。声明在这里由组件管理器解析，
+## 与厂商 BSP（vendor/m5stack_tab5/idf_component.yml）同一套路。
+## 影响面：此依赖只多一个 include 路径；该组件本来就会编（BSP 已依赖它）⇒ Tab5 零回归。
+dependencies:
+  espressif/esp_lcd_touch_gt911: "^1.1.1~2"

@@ -550,9 +550,16 @@ static void enter_recovery_mode(void)
             break;
         case 1:
             rg_system_switch_app(RG_APP_FACTORY, 0, 0, 0);
+            break;              /* switch_app 不返回；显式 break 防贯通 */
         case 2:
+            rg_system_exit();   /* 用户**明确**选了"重启到 launcher"才重启 */
+            break;
         default:
-            rg_system_exit();
+            /* 取消 / 超时 / 误触（触摸面板尤其容易）：**绝不能重启**。
+             * 原实现 default → rg_system_exit()：设备一旦进 recovery，点一下 → 重启 → 又进
+             * recovery ⇒ 死循环（真机 2026-10-11 反馈）。改成留在菜单里等明确选择。 */
+            rg_task_delay(50);
+            break;
         }
     }
 }

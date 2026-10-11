@@ -52,10 +52,26 @@
 /* 0.4.9：灯位改成**运行时**表达式（同一个镜像两个方向），调用点一字不改。
  * 判据 = 逻辑画面是不是横的（等价于原来那个 #if）。 */
 #define RG_BATT_LED_IS_LANDSCAPE (rg_geom()->w > rg_geom()->h)
+/* ⚠ 以下四个几何量允许 target 覆盖（#ifndef 守卫）：Metalio Claw4 是方屏
+ * （720x720，无横竖之分），灯位钉在**屏幕左下角**，由 targets/claw4/touch_layout.h
+ * 直接给出 CX/CY/R/RING + RG_BATT_LED_FIXED 1。Tab5 不定义它们 ⇒ 走这里的原值，
+ * 行为逐字不变。 */
+#ifndef RG_BATT_LED_CX
 #define RG_BATT_LED_CX       (RG_BATT_LED_IS_LANDSCAPE ? 140 : 360)
+#endif
+#ifndef RG_BATT_LED_CY
 #define RG_BATT_LED_CY       (RG_BATT_LED_IS_LANDSCAPE ? 675 : 1025)    /* 竖屏兜底值：真实位置由 rg_touch_skin_led_cy() 推导（见 led_cy_cur） */
+#endif
+#ifndef RG_BATT_LED_R
 #define RG_BATT_LED_R        12
+#endif
+#ifndef RG_BATT_LED_RING
 #define RG_BATT_LED_RING     3
+#endif
+/* 1 = 灯位钉死、**不**按控制区顶推导（claw4）；默认 0 = Tab5 的"竖屏跟着布局推导"。 */
+#ifndef RG_BATT_LED_FIXED
+#define RG_BATT_LED_FIXED    0
+#endif
 /* 灯条带 Y 范围不再写死：跟着 led_cy_cur 走（见 rg_batt_led_get_band），
  * 行号还要按 4 取整（帧缓冲一行 1440B，128B 边界 = 每 4 行，msync 要求对齐）。 */
 #define RG_BATT_LED_BAND_PAD 2
@@ -865,8 +881,10 @@ static void rg_overlay_try_panel(void)
     /* 灯位从布局推导（与面板同源）。条带跟着它走，所以灯动条带也动。 */
     /* 灯位从布局推导（与面板同源）。**横屏例外**：横屏的灯钉在左下角（RG_BATT_LED_CY），
      * 套竖屏那套"在控制区里居中"的推导会把它算到游戏画面附近去（用户 2026-10-08 指定左下角）。 */
+#if !RG_BATT_LED_FIXED
     if (RG_SCREEN_WIDTH <= RG_SCREEN_HEIGHT)
         led_cy_cur = rg_touch_skin_led_cy(ctrl_top_cur, RG_BATT_LED_R);
+#endif
     /* 这一行是"面板到底装上了没"的唯一判据（真机日志）：装上=控制区有底图；
      * 没有这行=被上面的判据挡了（btns 空 / 启动器），或面板生成失败。
      * 中间三个数是**本次安装用的视口**：GBA x=0 w=720 top=480 / GB x=120 w=480 top=456 /

@@ -145,9 +145,42 @@
  *   按键就会压到画面上。（横屏版的"上下零 margin"问题在竖屏下不存在。）      *
  * （launcher 菜单是全屏 UI，那时按键压到菜单是正常的、也是必需的。）          *
  ****************************************************************************/
-/* P2 触摸虚拟手柄总开关：P1 显示验证阶段置 0，避免触摸初始化的问题干扰显示判定；
- * 一次刷机 = 一个可见变化。P2 阶段改成 1 即可。 */
-#define RG_ENABLE_TOUCH_GAMEPAD 0
+/* P2 触摸虚拟手柄总开关：P1 显示验证阶段曾置 0（避免触摸初始化问题干扰显示判定）；
+ * P2 打开 —— 触摸初始化见 rg_input.c 的 claw4 分支（GT911 @0x5D，INT GPIO33）。 */
+#define RG_ENABLE_TOUCH_GAMEPAD 1
+
+/* ── 开机 recovery 组合键：**关掉**（0 = 永不触发）─────────────────────────
+ * components/retro-go/config.h:110 的默认值是 **RG_KEY_ANY**（任意一个键）：开机早期那 5 次
+ * 采样里只要有一个键被判成"按住"，就直接进 recovery 对话框；而那个对话框的 default 分支是
+ * rg_system_exit() ⇒ 重启 ⇒ 又进 recovery ⇒ **点一下就重启一轮的死循环**（真机 2026-10-11 反馈：
+ * "recovery mode 不断重启"）。
+ * 本机没有"上电时按住某物理键"这种常规入口（BOOT 键 + 触摸虚拟键），而**触摸在开机时可能上报
+ * 幽灵点** —— 用 ANY 等于把开机稳定性押在触摸驱动上。recovery 改从设置菜单进。
+ * ⚠ 别照 Tab5/其它 target 抄 RG_KEY_MENU：那和 BOOT 键同源，仍会被幽灵输入撞上。 */
+#define RG_RECOVERY_BTN 0
+
+/* ── 物理按键：BOOT 键（GPIO35）当系统键（菜单/退出）。按键区见 touch_layout.h 的 MENU。
+ * 低有效（按下接地）。
+ * ⚠ 2026-10-11 真机教训：**必须打开内部上拉**。第一版照"开发板 BOOT 键一般有外部上拉"
+ *   的想当然写成 pullup=0（= GPIO_FLOATING），实测引脚悬空读 0 ⇒ MENU 被判成"一直按住"
+ *   ⇒ launcher 收到 MENU 就 exit → switch_app → 重启 → 再 exit，**无限重启循环**
+ *   （日志：rg_system_exit / rg_system_switch_app / Shutdown: keys still held）。
+ *   悬空读 0 这一实测事实本身就否掉了"有外部上拉"⇒ 打开内部上拉即可。
+ *   教训：引脚外部有没有上拉/下拉，属于**必须实测**的板级事实，不能照开发板惯例推。 */
+#define RG_GAMEPAD_GPIO_MAP { \
+    {RG_KEY_MENU, .num = GPIO_NUM_35, .pullup = 1, .level = 0}, \
+}
+
+/* ── 振动马达（GPIO22，高有效）：虚拟键按下时给一次短脉冲（实现在 rg_input.c，
+ * 只在定义了这个宏的 target 上编译）。30ms 是"点得到"的下限，再短感觉得不到。 */
+#define RG_VIBRATE_GPIO   GPIO_NUM_22
+#define RG_VIBRATE_MS     30
+
+/* ── 电量圆灯：**暂时关闭**（驱动里的宏，默认 1 = Tab5 原行为）────────────────
+ * 官方板子读电量走 BQ27220 电量计（bq27220_gauge.cc），本 target 还没接 ⇒ BATT 恒为 0，
+ * "0%" 被当成真的没电 ⇒ 画红闪灯 + **把整条灯带擦成背景色** ⇒ 真机表现为按键下方一条
+ * 黑色遮挡（2026-10-11 反馈）。接上电量计后把这里改成 1 即可。 */
+#define RG_BATT_LED_ENABLE 0
 
 /* 虚拟按键可视层：把命中区画到屏幕上（0 = 完全不编，回到"盲区"模式）。
  * 实现在 rg_touch_overlay.c（目标无关的共享模块），由显示驱动在"推给面板前"合成
@@ -203,6 +236,12 @@
  *   在接上之前：主表 = SNES 版（键最全，当兜底），备表 = GBA 版。 */
 #define RG_GAMEPAD_TOUCH_MAP     RG_CLAW4_TOUCH_MAP_SNES
 #define RG_GAMEPAD_TOUCH_MAP_ALT RG_CLAW4_TOUCH_MAP_GBA
+/* 两张表**条数不等**（SNES 13 / GBA 11）—— 它们是两种机型布局，不是两个方向；
+ * 共享代码里那条"两张表条数必须一致"的静态断言对本机不成立，显式放行。 */
+#define RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS 1
+/* 选表判据改成**按当前机型**（方屏只有一个方向）：实现在 rg_input.c 的
+ * rg_claw4_use_gba_layout()（判据与叠加层铭牌同源 = app->configNs）。 */
+#define RG_TOUCH_KEYMAP_USE_ALT() rg_claw4_use_gba_layout()
 /* 物理面板尺寸（方屏两个方向相同） */
 #define RG_TOUCH_PHYS_W 720
 #define RG_TOUCH_PHYS_H 720

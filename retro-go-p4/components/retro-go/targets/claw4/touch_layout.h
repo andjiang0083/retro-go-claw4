@@ -96,6 +96,16 @@
  * 共享文件 rg_touch_overlay.c 头部那几行是 Tab5 的硬编码灯位（竖屏 x=360 / 横屏 x=140）。
  * 接驱动时要给它们加 `#ifndef` 守卫让本文件覆盖（Tab5 保持默认值 ⇒ 零回归），并且竖屏那条
  * "灯位从控制区顶推导"的分支要按 RG_BATT_LED_FIXED 跳过 —— 方屏灯位是钉死的。见计划 §9.4。 */
+/* 共享模块（rg_touch_overlay.c / rg_touch_skin.c）会引用 RG_TAB5_SWAP_* 画那颗
+ * 「X/Y ↔ L/R 调换」按钮。本机不做该功能 ⇒ 给一套**屏幕外**几何：
+ *   画：blit 与整屏矩形的交集为空 ⇒ 一个像素都不写；
+ *   点：命中矩形在 (0,0) 之外 ⇒ 永远命不中。
+ * 比"给共享代码加一堆 #if"安全得多 —— 共享文件一行不改，Tab5 也就零回归风险。 */
+#define RG_TAB5_SWAP_X  (-4096)
+#define RG_TAB5_SWAP_Y  (-4096)
+#define RG_TAB5_SWAP_W  72
+#define RG_TAB5_SWAP_H  44
+
 #define RG_BATT_LED_CX    28           /* 圆心 x：距左边 16px */
 #define RG_BATT_LED_CY   692           /* 圆心 y：距下边 16px */
 #define RG_BATT_LED_R     12           /* 半径（与 Tab5 同尺寸） */
