@@ -119,7 +119,7 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 0
+#define CLAW4_PPA_CONVERT 1   /* A/B：PPA 硬件做 565→888（1:1 不插值）*/
 #endif
 #ifndef CLAW4_PPA_SCALE_TEST
 #define CLAW4_PPA_SCALE_TEST 0   /* 测完改回 0 */
