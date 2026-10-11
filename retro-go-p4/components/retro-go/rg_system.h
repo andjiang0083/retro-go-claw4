@@ -247,6 +247,8 @@ bool rg_system_save_trace(const char *filename, bool append);
 void rg_system_event(int event, void *data);
 int64_t rg_system_timer(void);
 rg_app_t *rg_system_get_app(void);
+/* 当前运行的 app 是否为启动器（PPA 等加速通路不应作用于启动器 UI）*/
+bool rg_system_is_launcher(void);
 rg_stats_t rg_system_get_counters(void);
 
 // RTC and time-related functions

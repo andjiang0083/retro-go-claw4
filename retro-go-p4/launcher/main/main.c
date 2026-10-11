@@ -567,6 +567,12 @@ static void rg_test_auto_boot_rom(void)
      * 会 `Failed to create on-chip LDO power control driver (chan 4)`（SD 供电 LDO），
      * /sd 读不了 ⇒ 核心起不来、卡在沙漏。手动点游戏是同一套 warm handoff，只是中间隔了
      * 十几秒（SD 空闲）⇒ 这里改成"扫到 ROM 才走"，最多等 ~8 秒。 */
+    /* 2026-10-11 二修：**先纯延时再碰 SD**。实测"开机立刻扫 SD"会卡死在
+     * rg_storage_scandir 里（日志连一行都出不来），而人工点游戏（相隔十几秒）必成功
+     * ⇒ 复刻人工路径：先空等 10s 让 SD/LDO 栈稳定，再扫。标记日志用于分辨"跑了"/"卡住"。 */
+    RG_LOGW("RG_TEST_BOOTROM: delay 10000ms（等 SD 稳定）\n");
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    RG_LOGW("RG_TEST_BOOTROM: scan start\n");
     int tries = 0;
     while (!rg_test_boot_rom[0] && tries < 40)
     {
@@ -648,6 +654,10 @@ void app_main(void)
 /* RG_TEST_BOOTROM：无人值守测量专用（扫 ROM 目录直接进游戏）。
  * 与 RG_GBA_DIAG 分开是有意的 —— 后者还连带打开脚本按键/诊断刷屏，会换掉负载。
  * 未定义该宏的 target（如 Tab5）走到的分支与改动前逐字相同。 */
+#ifdef RG_TEST_BOOTROM
+    /* 固件自报构建开关：镜像名分不出配置（同名不同内容），让机器自己说 */
+    RG_LOGW("claw4-build: BOOTROM=%d\n", (int)RG_TEST_BOOTROM);
+#endif
 #if ((defined(RG_GBA_DIAG) && RG_GBA_DIAG) || (defined(RG_TEST_BOOTROM) && RG_TEST_BOOTROM)) && !defined(RG_TARGET_SDL2)
     rg_test_auto_boot_rom();   /* 测试钩子：直接进游戏，跳过 ROM 选择界面 */
 #endif

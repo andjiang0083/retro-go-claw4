@@ -139,11 +139,11 @@ static uint8_t *claw4_fb = NULL;
 static int claw4_fb_bytes = 0;
 /* 收集逻辑行用；长度必须编译期 ⇒ 按 geom.h 的 LCD_BUFFER_LENGTH_MAX 分配（720×32）。
  * 64 字节对齐：msync 只按 128B 对齐切分，但源缓冲对齐能让 memcpy 走向量路径。 */
-static uint16_t claw4_line_buffer[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(64)));
+static uint16_t claw4_line_buffer[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(128)));
 /* 叠加层合成暂存块（565 原生，**块内相对**索引）：rg_display 交来的是大端，
  * 共享叠加层模块只认原生 565 ⇒ 先还原进这里、画完按键再转 888。
  * 大小 = LCD_BUFFER_LENGTH_MAX（与 line_buffer 同量级，片内 RAM 合计约 92KB）。 */
-static uint16_t claw4_ovl_scratch[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(64)));
+static uint16_t claw4_ovl_scratch[LCD_BUFFER_LENGTH_MAX] __attribute__((aligned(128)));
 static int claw4_win_left = 0, claw4_win_top = 0, claw4_win_width = 0;
 static bool claw4_backlight_ready = false;
 
@@ -331,9 +331,11 @@ static void claw4_sd_power_enable(void)
      * "PPA 直接从模拟器原始小图放大进 fb" 的架构；否则只能做 1:1 格式转换。 */
     if (claw4_ppa)
     {
-        static uint16_t tsrc[8 * 2];
-        static uint16_t tref[24 * 6];
-        static uint16_t tgot[24 * 6];
+        /* PPA 硬要求缓冲 128 字节对齐：不对齐直接 ESP_ERR_INVALID_ARG，
+         * 输出全 0，自检会误报成「插值」（上次就栽在这）。 */
+        static uint16_t tsrc[8 * 2]  __attribute__((aligned(128)));
+        static uint16_t tref[24 * 6] __attribute__((aligned(128)));
+        static uint16_t tgot[24 * 8] __attribute__((aligned(128)));   /* 留一行余量 */
         for (int i = 0; i < 8 * 2; ++i)
             tsrc[i] = (uint16_t)(0x1000 + i * 0x0111);      /* 相邻像素必须不同 */
         for (int y = 0; y < 6; ++y)
@@ -715,6 +717,8 @@ static void lcd_init(void)
             esp_timer_start_periodic(claw4_diag_rep_timer, 1000000);
     }
 #endif
+    RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d\n",
+            (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST);
     RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
             CLAW4_PHYS_W, CLAW4_PHYS_H, CLAW4_DSI_LANES, CLAW4_DSI_LANE_MBPS,
             CLAW4_DPI_CLK_MHZ, (void *)claw4_fb);
@@ -780,6 +784,7 @@ static uint64_t claw4_pf_total, claw4_pf_copy, claw4_pf_ovl, claw4_pf_xpose, cla
 static uint32_t claw4_pf_blocks, claw4_pf_px, claw4_pf_selfcheck;
 static uint64_t claw4_pf_ppa_us; static uint32_t claw4_pf_ppa_ops, claw4_pf_ppa_err;
 static bool claw4_pf_msync_done;
+static uint32_t claw4_pf_ppa_skip_log;
 static int64_t claw4_pf_win = 0;
 static void claw4_pf_report(void)
 {
@@ -909,9 +914,36 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
     uint8_t *dst = claw4_fb + ((size_t)claw4_win_top * CLAW4_PHYS_W + claw4_win_left) * 3;
     const bool dst_aligned = (((uintptr_t)dst & 3u) == 0);
 #if CLAW4_PPA_CONVERT
+    bool claw4_ppa_done = false;     /* 只有 PPA 真的成功才置位；失败必须落回 CPU 展开 */
+#else
+    const bool claw4_ppa_done = false;
+#endif
+#if CLAW4_PPA_CONVERT
     /* PPA 只处理"本块不需要叠加层合成"的情形（需要合成的块必须 CPU 逐像素画按键）。
      * 源必须已换序成 native（PPA 用 byte_swap 处理大端在真机上未被验证过 ⇒ 不冒险）。 */
-    if (claw4_ppa &&
+    /* 自证：条件不满足必须说明原因，杜绝「看着跑了其实没跑」 */
+    if (claw4_ppa == NULL && claw4_pf_ppa_skip_log < 3)
+    {
+        claw4_pf_ppa_skip_log++;
+        RG_LOGE("claw4-ppa-skip: client=NULL（注册失败或未初始化）\n");
+    }
+    else if (claw4_ppa && (((uintptr_t)src_block & 127u) != 0) && claw4_pf_ppa_skip_log < 3)
+    {
+        claw4_pf_ppa_skip_log++;
+        RG_LOGE("claw4-ppa-skip: 源未 128 对齐 mod128=%u\n", (unsigned)((uintptr_t)src_block & 127u));
+    }
+    else if (claw4_ppa && (((uintptr_t)claw4_fb & 127u) != 0) && claw4_pf_ppa_skip_log < 3)
+    {
+        claw4_pf_ppa_skip_log++;
+        RG_LOGE("claw4-ppa-skip: 帧缓冲未 128 对齐 mod128=%u\n", (unsigned)((uintptr_t)claw4_fb & 127u));
+    }
+    else if (claw4_ppa && (size_t)rows * (size_t)claw4_win_width > (size_t)LCD_BUFFER_LENGTH_MAX && claw4_pf_ppa_skip_log < 3)
+    {
+        claw4_pf_ppa_skip_log++;
+        RG_LOGE("claw4-ppa-skip: 块 %ux%u 超行缓冲上限 %d\n", (unsigned)rows, (unsigned)claw4_win_width, (int)LCD_BUFFER_LENGTH_MAX);
+    }
+    extern bool rg_system_is_launcher(void);   /* 启动器 UI 必须由 CPU 绘制（PPA 会写坏它）*/
+    if (claw4_ppa && !band_block && !rg_system_is_launcher() &&
         (size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX &&
         ((uintptr_t)src_block & 127u) == 0 && ((uintptr_t)claw4_fb & 127u) == 0)
     {
@@ -952,17 +984,22 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         claw4_pf_xpose += (uint64_t)dt_ppa;                 /* 记进 xpose 段：与 CPU 版可比 */
         claw4_pf_ppa_us += (uint64_t)dt_ppa;
         claw4_pf_ppa_ops++;
-        if (perr != ESP_OK)
+        if (perr == ESP_OK)
         {
+            claw4_pf_msync_done = true;   /* PPA 直写 PSRAM，不经 CPU cache ⇒ 跳过 msync */
+            claw4_ppa_done = true;
+        }
+        else
+        {
+            /* 失败 ⇒ 不置 done ⇒ 落到下面的 CPU 展开。绝不允许"记条日志就当画好了" */
             claw4_pf_ppa_err++;
             if (claw4_pf_ppa_err < 4)
-                RG_LOGE("claw4: PPA convert failed: %s (w=%d rows=%d y=%d)\n",
+                RG_LOGE("claw4: PPA convert failed: %s (w=%d rows=%d y=%d) — 落回 CPU\n",
                         esp_err_to_name(perr), claw4_win_width, rows, claw4_win_top);
         }
-        claw4_pf_msync_done = true;      /* PPA 直写 PSRAM，不经 CPU cache ⇒ 后面跳过 msync */
     }
-    else
 #endif
+    if (!claw4_ppa_done)
     {
     for (int r = 0; r < rows; ++r)
     {
@@ -990,7 +1027,7 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
     }
 #if CLAW4_XPOSE_SELFCHECK
     /* 新旧两条路径逐字节比对（前 8 个块 × 前 4 行 × 前 64 像素）——机器判红蓝互换。 */
-    if (claw4_pf_selfcheck < 8)
+    if (claw4_pf_selfcheck < 24)
     {
         uint32_t bad = 0;
         const int nw = claw4_win_width < 64 ? claw4_win_width : 64;
@@ -1015,7 +1052,7 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
 #endif
     claw4_pf_xpose += (uint64_t)(esp_timer_get_time() - pf_t0);
     pf_t0 = esp_timer_get_time();
-    }   /* ← PPA 分支的 else 块结束 */
+    }   /* ← CPU 展开/回退块结束 */
     if (claw4_pf_msync_done) { claw4_pf_msync_done = false; goto claw4_skip_msync; }
 
     /* cache 写回：msync 要求偏移与长度都是 **128 字节的整数倍**，否则静默失败。

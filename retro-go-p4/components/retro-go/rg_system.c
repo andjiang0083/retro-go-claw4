@@ -1026,6 +1026,12 @@ char *rg_system_get_timezone(void)
     // return strdup(getenv("TZ"));
 }
 
+bool rg_system_is_launcher(void)
+{
+    rg_app_t *a = rg_system_get_app();
+    return a ? a->isLauncher : true;   /* 未知时保守当启动器 ⇒ 不启用加速通路 */
+}
+
 rg_app_t *rg_system_get_app(void)
 {
     return &app;
