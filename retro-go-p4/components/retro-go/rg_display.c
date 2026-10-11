@@ -154,6 +154,10 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length);
  * 契约：下面所有 lcd_* 调用点一字不改 —— 分发层把它们定义成 static inline 转发器。
  * 单方向构建（双 app 形态 / 或单一方向的实验档）走的也是这里，结果与改造前逐字一致。 */
 #include "drivers/display/tab5_dispatch.h"
+#elif RG_SCREEN_DRIVER == 5
+/* Metalio Claw4（方屏 720×720，单方向、线性 1:1）：一份驱动，**不需要分发层**。
+ * 同样契约：本文件里所有 lcd_* 调用点一字不改。 */
+#include "drivers/display/mipi_dsi_claw4.h"
 #elif RG_SCREEN_DRIVER == 99
 #include "drivers/display/sdl2.h"
 #else
