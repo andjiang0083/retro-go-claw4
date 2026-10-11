@@ -32,6 +32,7 @@
 
 #include <string.h>
 #include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_io.h"      /* esp_lcd_panel_io_tx_param：init 后改面板亮度 DCS */
 #include "esp_lcd_mipi_dsi.h"      /* DPI 面板 + esp_lcd_dpi_panel_get_frame_buffer */
 #include "esp_cache.h"             /* esp_cache_msync：写帧缓冲后必须写回 */
 #include "esp_ldo_regulator.h"     /* DSI PHY 供电（chan3 @2500mV） */
@@ -72,7 +73,16 @@
  * 所以默认也跟随：置 1 试不通就说明该保持 0。 */
 #define CLAW4_CALL_DISP_ON_OFF  0
 
+/* 面板亮度 / CABC（真机 2026-10-11 反馈"屏幕有点暗"的**真根因**，与我们的 PWM 无关）：
+ * 厂商 DCS 序列里写着 `0x51 = 0x83`（≈51% 亮度）且 `0x55 = 0xD2`（开 CABC 内容自适应调光）——
+ * 于是"软件 80% × 面板 51%"≈ 41%，暗是必然。
+ * init 之后我们改回：0x51 = 0xFF（拉满）、0x55 = 0x00（关 CABC，暗场景不再被进一步压暗）。
+ * 想用软件调光就改 CLAW4_DCS_BRIGHTNESS（0x00..0xFF）；设置里的背光档仍然只动 PWM。 */
+#define CLAW4_DCS_BRIGHTNESS    0xFF
+#define CLAW4_DCS_CABC_OFF      0x00
+
 static esp_lcd_panel_handle_t claw4_panel = NULL;
+static esp_lcd_panel_io_handle_t claw4_io = NULL;   /* DBI io：init 之后还要发亮度 DCS */
 static uint16_t *claw4_fb = NULL;      /* DPI 帧缓冲（PSRAM，720×720 RGB565，行跨距 720px） */
 static int claw4_fb_bytes = 0;
 /* 收集逻辑行用；长度必须编译期 ⇒ 按 geom.h 的 LCD_BUFFER_LENGTH_MAX 分配（720×32）。
@@ -158,6 +168,19 @@ static void claw4_sd_power_enable(void)
 }
 
 /* ──────────────────────────── 面板初始化 ───────────────────────────────── */
+/* 面板亮度修正：见 CLAW4_DCS_BRIGHTNESS 上方注释（厂商序列把亮度设成 51% 且开了 CABC）。 */
+static void claw4_panel_brightness_fix(void)
+{
+    if (!claw4_io)
+        return;
+    const uint8_t b = CLAW4_DCS_BRIGHTNESS;
+    const uint8_t c = CLAW4_DCS_CABC_OFF;
+    esp_err_t e1 = esp_lcd_panel_io_tx_param(claw4_io, 0x51, &b, 1);   /* Write Display Brightness */
+    esp_err_t e2 = esp_lcd_panel_io_tx_param(claw4_io, 0x55, &c, 1);   /* Write CABC Control */
+    RG_LOGI("claw4: panel brightness 0x51=0x%02X (was 0x83), CABC 0x55=0x%02X (was 0xD2) — tx err b=0x%x c=0x%x\n",
+            b, c, (int)e1, (int)e2);
+}
+
 static void lcd_init(void)
 {
     claw4_backlight_init();
@@ -221,8 +244,10 @@ static void lcd_init(void)
         RG_LOGE("claw4: esp_lcd_new_panel_nv3051f failed (0x%x)\n", (int)err);
         return;
     }
+    claw4_io = io;
     esp_lcd_panel_reset(claw4_panel);
     esp_lcd_panel_init(claw4_panel);
+    claw4_panel_brightness_fix();
 #if CLAW4_CALL_DISP_ON_OFF
     esp_lcd_panel_disp_on_off(claw4_panel, true);
 #endif

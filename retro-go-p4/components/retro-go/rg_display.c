@@ -120,6 +120,11 @@ void rg_display_push_failed(int top, int lines)
 #define FLOAT_TO_INT(x) ((int)((x) + 0.1f))
 
 static const char *SETTING_BACKLIGHT = "DispBacklight";
+/* 背光默认档（0..100）。可被 target 覆盖：claw4 的 NV3051F 面板 DCS 亮度上限较低，
+ * 软件默认给 100 才够亮（真机 2026-10-11 反馈"屏幕有点暗"）。 */
+#ifndef RG_DISPLAY_DEFAULT_BACKLIGHT
+#define RG_DISPLAY_DEFAULT_BACKLIGHT 80
+#endif
 /* 目标可在 target config.h 里覆盖这两个默认值（例：tab5 用 3x 整数缩放给触摸按键留 margin）。
  * custom_zoom 的上限同理：默认仍是 2.0，只有需要的 target 才放开。 */
 #ifndef RG_DISPLAY_DEFAULT_SCALING
@@ -1040,7 +1045,7 @@ void rg_display_init(void)
     RG_LOGI("Initialization...\n");
     // TO DO: We probably should call the setters to ensure valid values...
     config = (rg_display_config_t){
-        .backlight = rg_settings_get_number(NS_GLOBAL, SETTING_BACKLIGHT, 80),
+        .backlight = rg_settings_get_number(NS_GLOBAL, SETTING_BACKLIGHT, RG_DISPLAY_DEFAULT_BACKLIGHT),
         .scaling = rg_settings_get_number(NS_APP, SETTING_SCALING, RG_DISPLAY_DEFAULT_SCALING),
         .filter = rg_settings_get_number(NS_APP, SETTING_FILTER, RG_DISPLAY_FILTER_BOTH),
         .rotation = rg_settings_get_number(NS_APP, SETTING_ROTATION, RG_DISPLAY_ROTATION_AUTO),

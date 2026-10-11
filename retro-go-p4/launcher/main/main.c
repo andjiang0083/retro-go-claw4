@@ -14,6 +14,14 @@
 #include "browser.h"
 #include "gui.h"
 #include "rg_orient.h"            /* S2 屏幕方向：NVS 契约 + 引导槽切换 */
+
+/* S2「屏幕方向」功能开关：**默认 1** = 保留 Tab5 的形态（首次启动弹窗 + 设置里可重选）。
+ * 方屏单方向 target（targets/claw4）在自己的 config.h 里置 0 —— 它只有一个方向，
+ * 弹窗里选"横屏"会指向并不存在的 `_l` 分区槽，纯误导（用户 2026-10-11 定："去掉这个"）。
+ * 置 0 时：不弹窗、设置菜单里不出现该项；rg_orient.c 仍编译（rg_system.c 的按标签找 app 要用）。 */
+#ifndef RG_ORIENT_SWITCH
+#define RG_ORIENT_SWITCH 1
+#endif            /* S2 屏幕方向：NVS 契约 + 引导槽切换 */
 #include "rg_touch_overlay.h"   /* 触摸覆盖层内容代际号（调换按钮 → 立刻重画，见 retro_loop） */
 #include "webui.h"
 #include "updater.h"
@@ -49,6 +57,7 @@ static rg_gui_event_t toggle_tabs_cb(rg_gui_option_t *option, rg_gui_event_t eve
     return RG_DIALOG_VOID;
 }
 
+#if RG_ORIENT_SWITCH
 static rg_gui_event_t orientation_cb(rg_gui_option_t *option, rg_gui_event_t event)
 {
     if (event == RG_DIALOG_ENTER)
@@ -84,6 +93,7 @@ static rg_gui_event_t orientation_cb(rg_gui_option_t *option, rg_gui_event_t eve
     strcpy(option->value, rg_orient_name(rg_orient_running()));
     return RG_DIALOG_VOID;
 }
+#endif /* RG_ORIENT_SWITCH */
 
 static rg_gui_event_t scroll_mode_cb(rg_gui_option_t *option, rg_gui_event_t event)
 {
@@ -252,6 +262,8 @@ static void retro_loop(void)
     /* S2 屏幕方向 · 首次使用弹窗（用户 2026-10-09 要求：第一次使用弹窗二选一 + 写明以后在哪儿重选 + 默认竖屏）。
      * 默认竖屏是**结构性**的：没选择时设备跑的就是 factory 槽 = 竖屏；这里只负责"问一次并把选择记下来"，
      * 选横屏则需要切到 ota_0 槽（双槽镜像落地后才真正生效，未落地时 rg_orient_restart_into 会安全失败）。 */
+    /* 方屏（RG_ORIENT_SWITCH=0）没有第二个方向可切 ⇒ 不弹窗、不落盘。 */
+#if RG_ORIENT_SWITCH
     if (rg_orient_is_first_boot())
     {
         int chosen = rg_gui_dialog_orientation();
@@ -266,6 +278,7 @@ static void retro_loop(void)
         gui_update_theme();
         rg_settings_commit();
     }
+#endif /* RG_ORIENT_SWITCH */
 
 #ifdef RG_ENABLE_NETWORKING
     rg_network_init();
@@ -510,7 +523,9 @@ static void options_handler(rg_gui_option_t *dest)
         #endif
         {0, _("Startup app"),   "-", RG_DIALOG_FLAG_NORMAL, &startup_app_cb},
         /* S2 屏幕方向：用户要求"要说明设置哪里可以重选"—— 这一项就是那句提示指向的地方 */
+#if RG_ORIENT_SWITCH
         {0, _("Screen orientation"), "-", RG_DIALOG_FLAG_NORMAL, &orientation_cb},
+#endif
         RG_DIALOG_END,
     };
     memcpy(dest, options, sizeof(options));
