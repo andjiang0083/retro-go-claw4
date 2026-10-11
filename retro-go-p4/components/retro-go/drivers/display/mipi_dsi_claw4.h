@@ -37,6 +37,8 @@
 #include "esp_cache.h"             /* esp_cache_msync：写帧缓冲后必须写回 */
 #include "esp_timer.h"             /* 诊断用一次性定时器（CLAW4_DIAG_MARKERS） */
 #include "esp_ldo_regulator.h"     /* DSI PHY 供电（chan3 @2500mV） */
+#include "freertos/FreeRTOS.h"  /* 测试用自动交接任务 */
+#include "freertos/task.h"
 #include "driver/ledc.h"           /* 背光 PWM */
 #include "driver/i2c_master.h"     /* TCA9555（SD 卡槽供电使能） */
 #include "esp_lcd_nv3051f.h"       /* 厂商面板驱动（组件根目录，第三方 vendor 代码） */
@@ -223,6 +225,10 @@ static inline void claw4_expand4(claw4_u32a *w, uint16_t v0, uint16_t v1, uint16
  *   GBA 版按键 y[492,708]、SNES 版贴角 L/R y480..552 ⇒ 带顶 = 480。
  * 游戏区 240×160@3x 贴顶 = y0..480，**永不与带相交** ⇒ 那块「大端→原生拷贝 + 叠加层合成」
  * 是纯浪费（实测 copy 段 135ms/s ≈ 墙钟 13.5%）。Tab5 不走本驱动，此常量只影响 claw4。 */
+#ifndef CLAW4_TEST_AUTOBOOT
+#define CLAW4_TEST_AUTOBOOT 0   /* 测量构建：lcd_init 起任务，12s 后自动交接进游戏 */
+#endif
+
 #ifndef CLAW4_BAND_TOP
 #define CLAW4_BAND_TOP 480
 #endif
@@ -591,6 +597,25 @@ static void claw4_led_timer_cb(void *arg)
 }
 #endif /* RG_OVERLAY_ENABLED && RG_BATT_LED_ENABLE */
 
+#if CLAW4_TEST_AUTOBOOT
+static bool claw4_test_boot_started;
+static void claw4_test_boot_task(void *arg)
+{
+    /* 2026-10-11：启动器里的自动进游戏钩子执行不到（控制流被吃掉），
+     * 而 lcd_init 一定执行（自报行可证）⇒ 把交接挪到这里。
+     * 先等 12s 让启动器和 SD/LDO 稳定，再走与钩子相同的 switch_app。
+     * 守卫宏默认 0 ⇒ 可玩构建零影响（自报行会打印 AUTOBOOT）。 */
+    /* 真实签名见 rg_system.h:219（第4参是 uint32_t）；不写 noreturn，保留"若返回"的诊断。 */
+    extern void rg_system_switch_app(const char *part, const char *name, const char *args, uint32_t flags);
+    vTaskDelay(pdMS_TO_TICKS(12000));
+    const char *rom = "/sd/roms/gba/恶魔城_晓月之圆舞曲.gba";
+    RG_LOGW("claw4-testboot: 交接 -> %s\n", rom);
+    rg_system_switch_app("gbsp", "gba", rom, 0);
+    RG_LOGW("claw4-testboot: switch_app 已返回（未重启？）\n");
+    vTaskDelete(NULL);
+}
+#endif
+
 static void lcd_init(void)
 {
     claw4_backlight_init();
@@ -635,7 +660,7 @@ static void lcd_init(void)
     esp_lcd_dpi_panel_config_t dpi_cfg = NV3051F_720_720_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB888);
     dpi_cfg.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
     dpi_cfg.out_color_format = LCD_COLOR_FMT_RGB888;   /* 与 fb 一致 = 不做桥转换（厂商基线） */
-    dpi_cfg.num_fbs = 1;             /* 只一张帧缓冲：我们自己往里写，不要厂商那套三缓冲 */
+    dpi_cfg.num_fbs = 2;             /* 只一张帧缓冲：我们自己往里写，不要厂商那套三缓冲 */
     dpi_cfg.flags.use_dma2d = true;
     dpi_cfg.dpi_clock_freq_mhz = CLAW4_DPI_CLK_MHZ;   /* 覆盖宏里的 36（见文件头说明） */
 
@@ -717,8 +742,15 @@ static void lcd_init(void)
             esp_timer_start_periodic(claw4_diag_rep_timer, 1000000);
     }
 #endif
-    RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d\n",
-            (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST);
+#if CLAW4_TEST_AUTOBOOT
+    if (!claw4_test_boot_started) {
+        claw4_test_boot_started = true;
+        xTaskCreate(claw4_test_boot_task, "claw4boot", 4096, NULL, 5, NULL);
+        RG_LOGW("claw4-testboot: 任务已起，12s 后自动进游戏\n");
+    }
+#endif
+    RG_LOGW("claw4-build: PPA_CONVERT=%d SELFCHECK=%d SCALE_TEST=%d NUM_FBS=%d AUTOBOOT=%d\n",
+            (int)CLAW4_PPA_CONVERT, (int)CLAW4_XPOSE_SELFCHECK, (int)CLAW4_PPA_SCALE_TEST, dpi_cfg.num_fbs, (int)CLAW4_TEST_AUTOBOOT);
     RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
             CLAW4_PHYS_W, CLAW4_PHYS_H, CLAW4_DSI_LANES, CLAW4_DSI_LANE_MBPS,
             CLAW4_DPI_CLK_MHZ, (void *)claw4_fb);
@@ -951,6 +983,9 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
             .in = {
                 .buffer = (void *)src_block,
                 .pic_w = (uint32_t)claw4_win_width, .pic_h = (uint32_t)rows,
+                /* ★ 必须给 block_w/block_h：缺省=0 ⇒ PPA 读到 0×0 块 ⇒ 挂死（不是报错）。
+                 * 依据：本文件里已通过的 8x2 自检就是这么写的（.pic_w=8,.pic_h=2,.block_w=8,.block_h=2）。 */
+                .block_w = (uint32_t)claw4_win_width, .block_h = (uint32_t)rows,
                 .block_offset_x = 0, .block_offset_y = 0,
                 .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
             },
