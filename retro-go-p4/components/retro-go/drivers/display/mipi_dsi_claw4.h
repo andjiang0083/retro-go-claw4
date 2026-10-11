@@ -119,9 +119,22 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 0   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
+#define CLAW4_PPA_CONVERT 1   /* ★ 2026-10-11 真机事故：开启后 MENU 一按即卡死（BLOCKING PPA 任一配置不被接受就永久阻塞、不返回错误）
                                      * 重新启用前必须先按 skill 铁律改成「非阻塞 + 回调 + xSemaphoreTake(timeout)，超时永久停用并落回 CPU」。
                                      * 颜色映射也仍未定论（自检曾因采样到纯黑块给出假 bad=0）。 */
+#endif
+/* ★ 这三个开关必须定义在所有使用点之前（2026-10-11 深夜踩过：开关定义在使用点之后 ⇒
+ *   `#if CLAW4_PPA_NONBLOCK` 在未定义处按 0 求值 ⇒ 注册回调那段被**静默跳过**、
+ *   且因为被跳过所以拿不到"未声明符号"的报错 ⇒ 编出来的镜像看着 BUILD=0、其实没有非阻塞）。
+ *   与 skill 里"自报行只能引用定义点上方的宏"是同一条。 */
+#ifndef CLAW4_PPA_NONBLOCK
+#define CLAW4_PPA_NONBLOCK 1        /* 1 = 非阻塞+回调+有界等待（见下）；0 = 退回过阻塞式（危险） */
+#endif
+#ifndef CLAW4_PPA_DRAIN_TIMEOUT_MS
+#define CLAW4_PPA_DRAIN_TIMEOUT_MS 2000   /* 有界等待上限；超时 ⇒ 永久停用该通路并落回 CPU */
+#endif
+#ifndef CLAW4_PPA_COLOR_TOL
+#define CLAW4_PPA_COLOR_TOL 8       /* 逐通道门限：PPA 左移 vs CPU 位复制天然差 ≤7/255 */
 #endif
 #ifndef CLAW4_PPA_SCALE_TEST
 #define CLAW4_PPA_SCALE_TEST 0   /* 测完改回 0 */
@@ -136,6 +149,36 @@
 #endif
 #include "driver/ppa.h"
 static ppa_client_handle_t claw4_ppa = NULL;
+
+#if CLAW4_PPA_CONVERT
+/* ── PPA 非阻塞形态（照 Tab5 mode-1，2026-10-11 深夜）──────────────────────────
+ * 为什么是硬要求：PPA_TRANS_MODE_BLOCKING **一旦"配置被接受但永不完成"就永久阻塞、
+ * 不返回错误码** ⇒ `if (ret != ESP_OK) 落回 CPU` 完全无效。真机实测：游戏里按 MENU
+ * （GUI 推的 339/323 宽小块）⇒ 整机卡死，之后 63 秒全 0 帧、无 panic、无重启。
+ * 门限 2s：照 Tab5 口径（200ms/1s 会在重载头几秒把 PPA 误关）。 */
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t claw4_ppa_done_sem = NULL;
+static volatile bool     claw4_ppa_inflight  = false;
+static int64_t           claw4_ppa_sub_at    = 0;
+
+/* 颜色映射的运行期定案（自检在第一次推 PPA 时写入）。定义必须**早于** PERF 行（claw4_pf_report），
+ * 那一行会打印它们 ⇒ 放在后面会 `undeclared`（本轮实测）。 */
+static int  claw4_ppa_rgb_swap  = CLAW4_PPA_RGB_SWAP;
+static int  claw4_ppa_byte_swap = CLAW4_PPA_BYTE_SWAP;   /* -1 = 跟随 src_native */
+
+static void claw4_ppa_drain(void);   /* 定义在 PERF 计数器之后（要用到它们） */
+
+static bool claw4_ppa_done_isr(ppa_client_handle_t cli, ppa_event_data_t *ev, void *ud)
+{
+    (void)cli; (void)ev; (void)ud;
+    BaseType_t hp = pdFALSE;
+    if (claw4_ppa_done_sem)
+        xSemaphoreGiveFromISR(claw4_ppa_done_sem, &hp);
+    return hp == pdTRUE;
+}
+#endif
+
 
 static esp_lcd_panel_handle_t claw4_panel = NULL;
 static esp_lcd_panel_io_handle_t claw4_io = NULL;   /* DBI io：init 之后还要发亮度 DCS */
@@ -338,6 +381,23 @@ static void claw4_sd_power_enable(void)
         RG_LOGI("claw4: PPA register: %s\n", esp_err_to_name(pr));
         if (pr != ESP_OK)
             claw4_ppa = NULL;   /* 失败则整档退回 CPU 展开 */
+#if CLAW4_PPA_NONBLOCK
+        if (claw4_ppa)
+        {
+            ppa_event_callbacks_t cbs = { .on_trans_done = claw4_ppa_done_isr };
+            claw4_ppa_done_sem = xSemaphoreCreateBinary();
+            if (!claw4_ppa_done_sem ||
+                ppa_client_register_event_callbacks(claw4_ppa, &cbs) != ESP_OK)
+            {
+                RG_LOGW("claw4-ppa: 非阻塞回调注册失败 ⇒ 不用 PPA，全程 CPU\n");
+                ppa_unregister_client(claw4_ppa);
+                claw4_ppa = NULL;
+            }
+            else
+                RG_LOGW("claw4-ppa: 非阻塞形态就绪（完成回调+信号量，超时 %dms）\n",
+                        CLAW4_PPA_DRAIN_TIMEOUT_MS);
+        }
+#endif
     }
 #endif
 
@@ -629,6 +689,8 @@ static void claw4_test_boot_task(void *arg)
 
 
 
+
+
 static void lcd_init(void)
 {
     claw4_backlight_init();
@@ -776,6 +838,7 @@ static void lcd_deinit(void)
 
 static void lcd_sync(void)
 {
+    claw4_ppa_drain();   /* 帧末收块 */
     /* 无待发送队列：lcd_send_buffer 是同步写帧缓冲 + msync，这里无事可做。
      * （面板扫描在后台按 DPI 时序持续读帧缓冲，写完即见。） */
 }
@@ -831,6 +894,31 @@ static uint64_t claw4_pf_ppa_us; static uint32_t claw4_pf_ppa_ops, claw4_pf_ppa_
 static bool claw4_pf_msync_done;
 static uint32_t claw4_pf_ppa_skip_log;
 static int64_t claw4_pf_win = 0;
+static uint64_t claw4_pf_ppa_wait = 0;
+
+static void claw4_ppa_drain(void)
+{
+#if CLAW4_PPA_CONVERT && CLAW4_PPA_NONBLOCK
+    if (!claw4_ppa_inflight)
+        return;
+    claw4_ppa_inflight = false;
+    if (!claw4_ppa_done_sem || !claw4_ppa)
+        return;
+    if (xSemaphoreTake(claw4_ppa_done_sem, pdMS_TO_TICKS(CLAW4_PPA_DRAIN_TIMEOUT_MS)) == pdTRUE)
+    {
+        const int64_t dt = esp_timer_get_time() - claw4_ppa_sub_at;
+        claw4_pf_ppa_wait += (uint64_t)dt;
+        claw4_pf_xpose    += (uint64_t)dt;   /* 计入 xpose：与 CPU 路径同口径可比 */
+        return;
+    }
+    static int to;
+    if (to++ < 8)
+        RG_LOGE("claw4-ppa: done 超时(>%dms) ⇒ 永久停用 PPA、改 CPU 展开（挂死不返回错误码）\n",
+                CLAW4_PPA_DRAIN_TIMEOUT_MS);
+    ppa_unregister_client(claw4_ppa);
+    claw4_ppa = NULL;
+#endif
+}
 static void claw4_pf_report(void)
 {
     const int64_t now = esp_timer_get_time();
@@ -843,8 +931,10 @@ static void claw4_pf_report(void)
             (unsigned)(claw4_pf_xpose / 1000), (unsigned)(claw4_pf_msync / 1000),
             (unsigned)claw4_pf_blocks, (unsigned)(claw4_pf_px / 1024));
     if (claw4_pf_ppa_ops || claw4_pf_ppa_err)
-        RG_LOGI("claw4-PERF-ppa: ops=%u err=%u us=%u\n",
-                (unsigned)claw4_pf_ppa_ops, (unsigned)claw4_pf_ppa_err, (unsigned)claw4_pf_ppa_us);
+        RG_LOGI("claw4-PERF-ppa: ops=%u err=%u us=%u wait=%u nb=%d rgb=%d bsw=%d\n",
+                (unsigned)claw4_pf_ppa_ops, (unsigned)claw4_pf_ppa_err, (unsigned)claw4_pf_ppa_us,
+                (unsigned)(claw4_pf_ppa_wait / 1000), (int)CLAW4_PPA_NONBLOCK,
+                (int)claw4_ppa_rgb_swap, (int)claw4_ppa_byte_swap);
     claw4_pf_ppa_ops = claw4_pf_ppa_err = 0; claw4_pf_ppa_us = 0;
     claw4_pf_total = claw4_pf_copy = claw4_pf_ovl = claw4_pf_xpose = claw4_pf_msync = 0;
     claw4_pf_blocks = claw4_pf_px = 0;
@@ -863,8 +953,6 @@ static void claw4_pf_report(void)
  *   并且按**真源的内存序**构造（src_native=false 时存大端交换后的值）⇒ 连 byte_swap 一起判。
  * 判定：只有逐字节全等的组合才算胜者；**找不到胜者就自动停用 PPA**（颜色正确优先于帧率）。
  * ══════════════════════════════════════════════════════════════════════════ */
-static int  claw4_ppa_rgb_swap   = CLAW4_PPA_RGB_SWAP;
-static int  claw4_ppa_byte_swap  = CLAW4_PPA_BYTE_SWAP;   /* -1 = 跟随 src_native */
 static bool claw4_ppa_cfg_ready  = false;
 static int  claw4_ppa_color_bad[4] = {-1, -1, -1, -1};    /* 供 PERF 行/脚本核对 */
 
@@ -876,9 +964,6 @@ static int  claw4_ppa_color_bad[4] = {-1, -1, -1, -1};    /* 供 PERF 行/脚本
  * 实测唯一通道正确的组合是 rs=0/bs=1（A3；rs=1 会把 RED 变成 0018e0 = 彻底错乱）。
  * 想恢复严格模式：改成 0。
  */
-#ifndef CLAW4_PPA_COLOR_TOL
-#define CLAW4_PPA_COLOR_TOL 8
-#endif
 static bool claw4_ppa_color_selftest(bool src_native)
 {
     enum { CW = 32, CH = 8 };
@@ -1071,6 +1156,7 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         return;
     }
 
+    claw4_ppa_drain();   /* 入口先收上一块（非阻塞下 PPA 可能还在读源/暂存块） */
     const int64_t pf_all0 = esp_timer_get_time();
 
     /* 源是 565 大端（rg_display 已交换）→ 展开成 BGR888 写进面板帧缓冲。
@@ -1154,7 +1240,10 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         RG_LOGE("claw4-ppa-skip: 块 %ux%u 超行缓冲上限 %d\n", (unsigned)rows, (unsigned)claw4_win_width, (int)LCD_BUFFER_LENGTH_MAX);
     }
     extern bool rg_system_is_launcher(void);   /* 启动器 UI 必须由 CPU 绘制（PPA 会写坏它）*/
+    /* ★ 守卫收紧（2026-10-11 夜）：只处理**整宽、left=0** 的块。
+     * 依据：卡死前最后一帧的块宽直方图出现 `339 x2, 323 x1` —— 那是 GUI/菜单推的小块。 */
     if (claw4_ppa && !band_block && !rg_system_is_launcher() &&
+        claw4_win_width == CLAW4_PHYS_W && claw4_win_left == 0 &&
         (size_t)rows * (size_t)claw4_win_width <= (size_t)LCD_BUFFER_LENGTH_MAX &&
         ((uintptr_t)src_block & 127u) == 0 && ((uintptr_t)claw4_fb & 127u) == 0)
     {
@@ -1209,7 +1298,7 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
             .mirror_x = false, .mirror_y = false,
             .rgb_swap = (bool)claw4_ppa_rgb_swap,
             .byte_swap = (claw4_ppa_byte_swap < 0) ? !src_native : (bool)claw4_ppa_byte_swap,
-            .mode = PPA_TRANS_MODE_BLOCKING,
+            .mode = CLAW4_PPA_NONBLOCK ? PPA_TRANS_MODE_NON_BLOCKING : PPA_TRANS_MODE_BLOCKING,
         };
         /* PPA 绕过 CPU cache 直写 PSRAM ⇒ 先失效目的区间，否则 CPU 里的陈旧行稍后回写会覆盖它 */
         {
@@ -1229,7 +1318,11 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
         claw4_pf_ppa_ops++;
         if (perr == ESP_OK)
         {
-            claw4_pf_msync_done = true;   /* PPA 直写 PSRAM，不经 CPU cache ⇒ 跳过 msync */
+            claw4_pf_msync_done = true;
+#if CLAW4_PPA_NONBLOCK
+            claw4_ppa_inflight = true;
+            claw4_ppa_sub_at = esp_timer_get_time();
+#endif   /* PPA 直写 PSRAM，不经 CPU cache ⇒ 跳过 msync */
             claw4_ppa_done = true;
         }
         else
