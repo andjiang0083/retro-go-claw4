@@ -660,7 +660,7 @@ static void lcd_init(void)
     esp_lcd_dpi_panel_config_t dpi_cfg = NV3051F_720_720_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB888);
     dpi_cfg.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
     dpi_cfg.out_color_format = LCD_COLOR_FMT_RGB888;   /* 与 fb 一致 = 不做桥转换（厂商基线） */
-    dpi_cfg.num_fbs = 2;             /* 只一张帧缓冲：我们自己往里写，不要厂商那套三缓冲 */
+    dpi_cfg.num_fbs = 1;             /* 只一张帧缓冲：我们自己往里写，不要厂商那套三缓冲 */
     dpi_cfg.flags.use_dma2d = true;
     dpi_cfg.dpi_clock_freq_mhz = CLAW4_DPI_CLK_MHZ;   /* 覆盖宏里的 36（见文件头说明） */
 

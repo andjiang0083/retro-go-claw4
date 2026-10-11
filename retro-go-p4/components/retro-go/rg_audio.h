@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>   /* size_t：本头文件在 submit/sink 接口里用了它，必须自带（
+                       * 否则把本头放在第一个 include 的编译单元会直接编不过）*/
 
 typedef struct // __attribute__((packed))
 {

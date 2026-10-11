@@ -10,6 +10,9 @@
 #endif
 
 extern const rg_audio_driver_t rg_audio_driver_dummy;
+#if RG_AUDIO_USE_CLAW4_BT
+extern const rg_audio_driver_t rg_audio_driver_claw4_bt;
+#endif
 #if RG_AUDIO_USE_TAB5_CODEC
 extern const rg_audio_driver_t rg_audio_driver_tab5_es8388;
 #endif
@@ -23,6 +26,11 @@ extern const rg_audio_driver_t rg_audio_driver_sdl2;
 
 static const rg_audio_sink_t sinks[] = {
     {&rg_audio_driver_dummy,  0, "Dummy"  },
+#if RG_AUDIO_USE_CLAW4_BT
+    /* claw4：I2S→板载蓝牙音频芯片（UART2 AT 控制）。放在 Dummy 之后 ⇒ 命中的是 sinks[1 % count]，
+     * 即"有真音频设备就不再用 Dummy"。官方 MetalioClaw4 的全部参数见 drivers/audio/claw4_bt_audio.c 头注释。 */
+    {&rg_audio_driver_claw4_bt, 0, "Claw4 BT Audio"},
+#endif
 #if RG_AUDIO_USE_TAB5_CODEC
     {&rg_audio_driver_tab5_es8388, 0, "ES8388"},
 #endif
@@ -76,6 +84,23 @@ static const char *get_last_driver_error(void)
 
 void rg_audio_init(int sampleRate)
 {
+    /* claw4：config 未定义音频采样率时调用方可能传 0 ⇒ Dummy sink 会除零变成 inf 睡死。
+     * 统一兜底，非法值一律按 GBA 原生的 32768Hz 处理（日志可查）。 */
+    if (sampleRate <= 0)
+    {
+        RG_LOGW("rg_audio: 采样率非法(%d)，兜底为 32768Hz\n", sampleRate);
+        sampleRate = 32768;
+    }
+#ifdef RG_AUDIO_FORCE_SAMPLE_RATE
+    /* claw4：音频芯片（I2S 从机）采样率固定，核心若按自己的原生率喂数据就会慢放/快放。
+     * 这里按 target 声明强制对齐（Tab5/其它 target 未定义此宏 ⇒ 逻辑与产物逐字节不变）。 */
+    if (sampleRate != RG_AUDIO_FORCE_SAMPLE_RATE)
+    {
+        RG_LOGI("rg_audio: 采样率按 target 强制 %dHz → %dHz\n", sampleRate, RG_AUDIO_FORCE_SAMPLE_RATE);
+        sampleRate = RG_AUDIO_FORCE_SAMPLE_RATE;
+    }
+#endif
+
     RG_ASSERT(audio.sink == NULL, "Audio sink already initialized!");
 
     if (!audio.lock)

@@ -56,6 +56,13 @@
 #define RG_AUDIO_USE_INT_DAC        0   // 0 = Disable
 #define RG_AUDIO_USE_EXT_DAC        0   // 0 = Disable（老 i2s.c 不支持 MCLK，用不了）
 #define RG_AUDIO_USE_TAB5_CODEC     0   // ES8388 via M5 BSP: MCLK=30 BCLK=27 WS=29 DOUT=26
+/* Claw4 音频：I2S→板载蓝牙音频编解码芯片（UART2 AT 控制），参数抄官方 MetalioClaw4。
+ * 芯片是 I2S 从机模式的**主机**（它给 BCLK/WS）且采样率固定 16kHz ⇒ 必须强制对齐，
+ * 否则核心按 GBA 原生 32768Hz 喂数据会慢放。实现见 drivers/audio/claw4_bt_audio.c。 */
+#define RG_AUDIO_USE_CLAW4_BT       1
+/* RG_AUDIO_FORCE_SAMPLE_RATE 已停用：实测 gbsp 核心按自己的原生率(32768)喂数据、
+ * 不读 rg_audio_get_sample_rate() ⇒ 强制系统采样率没有作用，采样率换算必须在 sink 内做。
+ * （宏本身与 rg_audio.c 里的守卫保留，供将来确认核心会读取时再启用。） */
 
 
 /****************************************************************************
