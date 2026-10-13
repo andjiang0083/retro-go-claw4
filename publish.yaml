@@ -14,4 +14,4 @@ platform_entries:
     cover: releases/cover-1280x720-retro-go-tab5-tab5.png
     project_link: "https://github.com/andjiang0083/retro-go-tab5"
     bin_external: true          # 本仓不携带产物（公开仓）→ 跳过 bin 存在性校验
-    readback: "0.4.9 待上传（本版为单 app 形态：一份镜像支持横竖屏切换；分区表与此前多 app 形态不同，M5Burner 整包写入 0x0 会把分区表一并更新）"   # 登录态接口回读：0.4.8 已进审核队列（vid 可查 /api/v1/users/me/firmwares）
+    readback: 2026-10-12 PUBLISHED vid=2108966707251146754   # 登录态回读：0.4.9 已放行（提交于 2026-10-11 01:03）

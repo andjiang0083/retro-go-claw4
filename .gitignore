@@ -43,3 +43,26 @@ backup/
 partitions.csv
 partitions.bin
 .buildlogs/
+
+# ── 公开仓内容边界（2026-10-13 清理）──────────────────────────────────────────
+# 本仓只放「产品代码 + 上游文档 + 发布说明」。
+# 规划/实测/笔记、设备备份、调试脚本一律不进公开仓（本地留档 ~/esp32/retro-go-internal/）。
+backup/
+rg-p4.tar.gz
+display-test/
+docs/baseline/
+*.log
+__pycache__/
+# 内部文档的命名约定（SPEC/计划/交接/实测类不公开）
+docs/SPEC-*.md
+docs/HANDOFF-*.md
+docs/P3-*.md
+docs/PPA-*.md
+docs/BENCH-*.md
+docs/CLAW4-PORT-PLAN.md
+docs/CLAW4-INTERNAL-HEAP-PLAN.md
+docs/CLAW4-PPA-VALIDATION.md
+docs/CLAW4-P3-FPS.md
+docs/TAB5-DISPLAY-PATH-BASELINE.md
+docs/ORIENTATION-SWITCH-EVAL.md
+docs/baseline/
