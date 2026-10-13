@@ -12,5 +12,5 @@ platform_entries:
     cover: releases/cover-1280x720-retro-go-tab5-tab5.png
     project_link: "https://github.com/andjiang0083/retro-go-tab5"
     bin_external: true          # 本仓不携带产物（公开仓）→ 跳过 bin 存在性校验
-    readback: 待上传 0.4.10（提交后立刻回写 vid）
+    readback: 2026-10-13 PENDING vid=2110021281479159810   # 登录态回读：已进审核队列（旧版 0.4.9 仍 PUBLISHED）
 # 上一版：2026-10-12 PUBLISHED vid=2108966707251146754（0.4.9）
