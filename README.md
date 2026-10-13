@@ -3,8 +3,7 @@
 > ### 📟 本分支 `claw4` 是 **Metalio Claw4** 的移植线，不是 M5Stack Tab5
 >
 > 本分支把同一棵 retro-go 树移植到 **Metalio Claw4（ESP32-P4 · 720×720 方屏）**；Tab5 的 target 一行未动。
-> 下面的 Tab5 说明只作上游参考 —— Claw4 的移植档案、方屏几何/键位表与显示通路验证报告见
-> [`docs/CLAW4-PORT-PLAN.md`](docs/CLAW4-PORT-PLAN.md) · [`docs/CLAW4-PPA-VALIDATION.md`](docs/CLAW4-PPA-VALIDATION.md)。
+> 下面的 Tab5 说明只作上游参考 —— Claw4 的方屏几何与 11 键触摸手柄见下图真机实拍。
 >
 > ![真机实拍：Metalio Claw4 方屏机身上的 GBA 游戏画面与 11 键触摸手柄 —— 上半屏是 720×480 游戏画面，下半屏左侧十字菱形方向键、中线竖排 SELECT/START/MENU、右侧菱形 R（上）/L（左）/A（右）/B（下），机身右下可见香槟金金属边框](docs/images/claw4-gba-castlevania-device.jpg)
 >
@@ -13,10 +12,8 @@
 > 2026-10-12 真机拍摄；当前版本界面与此图一致。*
 >
 > This `claw4` branch is the port to the **Metalio Claw4** (ESP32-P4, 720×720 square panel) — **not** the
-> M5Stack Tab5, whose target is untouched. The Tab5 text below is upstream reference only; the Claw4 port
-> records, square-screen geometry/keymap and display-path validation report live in
-> [`docs/CLAW4-PORT-PLAN.md`](docs/CLAW4-PORT-PLAN.md) and
-> [`docs/CLAW4-PPA-VALIDATION.md`](docs/CLAW4-PPA-VALIDATION.md).
+> M5Stack Tab5, whose target is untouched. The Tab5 text below is upstream reference only; the Claw4
+> square-screen geometry and 11-key touch pad are shown in the photo below.
 >
 > *Photo: Metalio Claw4 held in hand — GBA screen (integer 3x, 720×480, pinned to the top) plus the 11-key
 > touch pad in the 240 px band below (D-pad diamond left, SELECT/START/MENU stacked on the centre line,
@@ -30,7 +27,12 @@ ColecoVision / PC Engine / Lynx / Game & Watch，共 11 个机种。
 **v0.4.9 起支持横竖屏切换**：一份镜像同时支持两个方向，首次开机会询问用哪个，之后能在设置里随时改
 （选择会保存，改完自动重启生效）。界面为触摸屏重做：游戏画面（720x480 = GBA 240x160 的 3 倍整数缩放）
 占满可见区，虚拟手柄画在四周留白处 —— 竖屏时贴顶、手柄在下；横屏时画面居中、手柄在左右两侧。
-ROM 直接放 SD 卡（`.zip` 压缩包也能直接放，卡上省一半空间），存档写在卡里、关机重启后还在。
+存档写在卡里、关机重启后还在。
+
+**v0.4.10 — 输入响应提速（本版唯一改动）**：把输入任务的优先级提到显示任务之上，削掉"触摸读被逐像素
+推屏抢占"的长尾。手指按住屏幕时：单次触摸读 **17.2ms → 8.2ms**（最差从 30ms → 8.4ms，抖动几乎清零）、
+采样周期 **29.3ms → 17.8ms**，也就是**按下到核心读到的确认延迟约 58ms → 35ms**。实机上手感明显更跟手。
+显示吞吐与帧率无损失（同条件实测 50.4 vs 51.9ms/s）。仅 Tab5 target 变更，Claw4 一行未动。
 
 ![屏幕内容：横屏模式下的 GBA 游戏画面与虚拟手柄——顶部一排是 L、X/Y ↔ L/R 调换键、R，左侧十字键，右侧 A/B/X/Y 菱形，底部 SELECT / START / MENU，左下角绿色电量圆灯](docs/images/tab5-landscape-game.jpg)
 
@@ -47,17 +49,24 @@ fills the visible area and the virtual gamepad is drawn in the margins around it
 with the pad below in portrait, centred with the pad on both sides in landscape. ROMs live on the SD
 card (`.zip` works directly, halving card usage) and saves persist across reboots.
 
+**v0.4.10 — input response speedup (the only change in this release)**: the input task now runs above the
+display task, which removes the tail latency of the touch read being preempted by per-pixel pushes. With a
+finger held on the screen: single touch read **17.2ms → 8.2ms** (worst case 30ms → 8.4ms, jitter almost
+gone) and the sampling period **29.3ms → 17.8ms** — i.e. the press-to-core confirmation latency goes from
+~58ms to ~35ms. Noticeably more responsive in hand. Display throughput and frame rate are unchanged
+(50.4 vs 51.9ms/s under the same load). Tab5 target only; Claw4 is untouched.
+
 ---
 
 ## 下载与安装 / Download & install
 
-v0.4.9 是**一份构建**，两个渠道各取一个文件即可（不再有"装错的那份只有菜单、进不了游戏"的问题 ——
+v0.4.10 是**一份构建**，两个渠道各取一个文件即可（不再有"装错的那份只有菜单、进不了游戏"的问题 ——
 那来自旧的双 app 形态；现在启动器与全部模拟器核都在同一个 app 里）：
 
 | 安装渠道 | 用哪个文件 | 说明 |
 |---|---|---|
-| **M5Burner**（推荐）或 esptool | `retro-go-tab5-0.4.9-merged.bin` | 完整镜像（bootloader@0x2000 + 分区表@0x8000 + app@0x10000），从 0x0 整片写入 |
-| **[M5Launcher](https://github.com/bmorcelli/Launcher)** | `retro-go-tab5-0.4.9-launcher-singleapp.bin` | 该平台只能装单个 app 镜像；这份就是同一个 app 的纯 app 镜像 |
+| **M5Burner**（推荐）或 esptool | `retro-go-tab5-0.4.10-merged.bin` | 完整镜像（bootloader@0x2000 + 分区表@0x8000 + app@0x10000），从 0x0 整片写入 |
+| **[M5Launcher](https://github.com/bmorcelli/Launcher)** | `retro-go-tab5-0.4.10-launcher-singleapp.bin` | 该平台只能装单个 app 镜像；这份就是同一个 app 的纯 app 镜像 |
 
 安装包与校验值见 [`dist/`](dist/)（每个版本一个目录，含 `README_M5Burner.md`、双语说明与封面图）。
 
