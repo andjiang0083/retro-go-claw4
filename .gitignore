@@ -66,3 +66,6 @@ docs/CLAW4-P3-FPS.md
 docs/TAB5-DISPLAY-PATH-BASELINE.md
 docs/ORIENTATION-SWITCH-EVAL.md
 docs/baseline/
+retro-go-p4/docs/
+docs/archive/PORTRAIT-TAB5-HANDOFF.md
+docs/archive/*.patch
