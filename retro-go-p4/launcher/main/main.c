@@ -535,7 +535,9 @@ static void options_handler(rg_gui_option_t *dest)
 
 static void about_handler(rg_gui_option_t *dest)
 {
+#ifndef RG_GUI_HIDE_CRC_CACHE   /* 非 claw4：上游原样 */
     *dest++ = (rg_gui_option_t){0, _("Build CRC cache"), NULL, RG_DIALOG_FLAG_NORMAL, &prebuild_cache_cb};
+#endif
     #if defined(RG_ENABLE_NETWORKING) && RG_UPDATER_ENABLE && !defined(RG_SINGLE_APP)
     // 单 app 形态没有第二个 app 分区给 updater 落新固件，所以这一项不显示（见 rg_system.c 的
     // update_boot_config）。升级改用 M5Burner / esptool 整包刷。

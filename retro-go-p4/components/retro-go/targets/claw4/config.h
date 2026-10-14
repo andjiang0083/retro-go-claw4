@@ -19,6 +19,21 @@
 /* 背光默认拉满：NV3051F 的 DCS 亮度上限低于常见屏，默认 80% 在真机上偏暗 */
 #define RG_DISPLAY_DEFAULT_BACKLIGHT 100
 
+/* ── 设置项精简（用户拍板 2026-10-15）：隐藏"看得到但没用/不该用户碰"的项 ──
+ * 判据：这台机没有网络、没有 RTC，也没有面向用户的官网/调试需求。
+ *   CLOCK      时钟+时区 —— 无网无 RTC，时间必然不准，摆着就是误导
+ *   CRC_CACHE  封面索引缓存 —— 后台自动补算，用户碰它没有意义
+ *   WEBSITE    About 里的官网 —— 国内用户打不开，且不是设置
+ *   DEBUG_MENU About 里的调试菜单 —— 不该出现在用户界面
+ *   LANGUAGE   语言选择 —— 本版未引入中文，选了也只有英文，纯误导
+ * 机制：这些宏只在 claw4 定义；共享文件一律用 #ifndef RG_GUI_HIDE_* 包夹，
+ *       tab5 等目标不定义 ⇒ 保留上游原码（「他机零位移」铁律）。 */
+#define RG_GUI_HIDE_CLOCK           1
+#define RG_GUI_HIDE_CRC_CACHE       1
+#define RG_GUI_HIDE_WEBSITE         1
+#define RG_GUI_HIDE_DEBUG_MENU      1
+#define RG_GUI_HIDE_LANGUAGE        1
+
 
 /****************************************************************************
  * Storage (SD 卡, SDMMC slot0 4-bit + 片上 LDO chan4)

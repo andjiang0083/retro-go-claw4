@@ -1782,7 +1782,9 @@ void rg_gui_options_menu(void)
     const rg_gui_option_t misc_options[] = {
         {0, _("Font type"),     "-", RG_DIALOG_FLAG_NORMAL, &font_type_cb},
         {0, _("Theme"),         "-", RG_DIALOG_FLAG_NORMAL, &theme_cb},
+#ifndef RG_GUI_HIDE_CLOCK   /* claw4 无网无 RTC ⇒ 时钟必然不准，隐藏（tab5 走上游原样） */
         {0, _("Show clock"),    "-", RG_DIALOG_FLAG_NORMAL, &show_clock_cb},
+#endif
         #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
         /* "Touch buttons"（关闭虚拟按键）暂时屏蔽：蓝牙手柄支持之前，触摸是这台设备
          * 唯一的输入源，关掉就等于把用户困住（见 rg_touch_overlay.c 强制 visible=true 的注释）。
@@ -1790,8 +1792,12 @@ void rg_gui_options_menu(void)
         {0, _("Touch opacity"),  "-", RG_DIALOG_FLAG_NORMAL, &touch_opacity_cb},
         {0, _("Touch skin"),     "-", RG_DIALOG_FLAG_NORMAL, &touch_skin_cb},
         #endif
+#ifndef RG_GUI_HIDE_CLOCK   /* 时钟都隐藏了，时区没有存在意义 */
         {0, _("Timezone"),      "-", RG_DIALOG_FLAG_NORMAL, &timezone_cb},
+#endif
+#ifndef RG_GUI_HIDE_LANGUAGE /* 本版未引入中文：选了也只有英文 ⇒ 隐藏 */
         {0, _("Language"),      "-", RG_DIALOG_FLAG_NORMAL, &language_cb},
+#endif
         #ifdef RG_GPIO_LED // Only show disk LED option if disk LED GPIO pin is defined
         {0, _("LED options"),   NULL, RG_DIALOG_FLAG_NORMAL, &led_indicator_cb},
         #endif
@@ -1866,11 +1872,16 @@ void rg_gui_about_menu(void)
         {0, _("Version"), (char *)app->version, RG_DIALOG_FLAG_MESSAGE, NULL},
         {0, _("Date"), (char *)app->buildDate, RG_DIALOG_FLAG_MESSAGE, NULL},
         {0, _("Target"), (char *)RG_TARGET_NAME, RG_DIALOG_FLAG_MESSAGE, NULL},
+#ifndef RG_GUI_HIDE_WEBSITE   /* claw4：官网不是设置，且国内打不开 */
         {0, _("Website"), (char *)RG_PROJECT_WEBSITE, RG_DIALOG_FLAG_MESSAGE, NULL},
+#endif
         RG_DIALOG_SEPARATOR,
         {4, _("Options"), NULL, have_option_btn ? RG_DIALOG_FLAG_HIDDEN : RG_DIALOG_FLAG_NORMAL , NULL},
         // {1, _("View credits", NULL, RG_DIALOG_FLAG_NORMAL, NULL},
+#ifndef RG_GUI_HIDE_DEBUG_MENU /* claw4：调试菜单不该出现在用户界面。
+                                  * 注：下方 switch 的 case 2 按 .arg 分发，删项不错位。 */
         {2, _("Debug menu"), NULL, RG_DIALOG_FLAG_NORMAL, NULL},
+#endif
         {3, _("Reset settings"), NULL, RG_DIALOG_FLAG_NORMAL, NULL},
         RG_DIALOG_END,
     };
