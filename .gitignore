@@ -70,3 +70,6 @@ retro-go-p4/docs/
 docs/archive/PORTRAIT-TAB5-HANDOFF.md
 docs/archive/*.patch
 docs/archive/
+
+# 发布产物不入库（GitHub Release/商店资产从这里上传，git 历史不带二进制）
+releases/
