@@ -110,8 +110,14 @@ SLUG="andjiang0083/retro-go-tab5"
 REL_JSON="$(curl -s --max-time 40 -X POST -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
   "https://api.github.com/repos/$SLUG/releases" \
   -d "{\"tag_name\":\"$VER\",\"target_commitish\":\"claw4\",\"name\":\"retro-go claw4 $VER\",\"body\":\"Claw4 (ESP32-P4) merged bin，写 0x0。三点门禁通过；真机已验证。\n\n商店 github-sync 资产：$BIN_NAME\",\"draft\":false,\"prerelease\":false}")"
-REL_ID="$(echo "$REL_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')"
-[ -n "$REL_ID" ] || { echo "⛔ 建 Release 失败: $(echo "$REL_JSON" | head -c 200)"; exit 1; }
+# macOS sh 的 echo 会解释响应里的 \n —— JSON 一律 printf '%s' 管道（2026-10-14 踩过：
+# Release 实际建成、本地解析崩在 line 43，误以为失败会重复建 tag）。
+REL_ID="$(printf '%s' "$REL_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+if [ -z "$REL_ID" ]; then
+  # 解析失败≠没建成：先按 tag 回查，存在就复用 id（幂等）
+  REL_ID="$(curl -s --max-time 20 "https://api.github.com/repos/$SLUG/releases/tags/$VER" -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+fi
+[ -n "$REL_ID" ] || { printf '%s' "$REL_JSON" | head -c 200; echo "⛔ 建 Release 失败"; exit 1; }
 for A in "$BIN_NAME" "${BIN_NAME}.sha256"; do
   CODE="$(curl -s --max-time 120 -o /dev/null -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/octet-stream' \
