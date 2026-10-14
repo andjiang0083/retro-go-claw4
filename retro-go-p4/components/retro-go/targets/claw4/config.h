@@ -27,6 +27,10 @@
 #define RG_GUI_HIDE_WEBSITE         1
 #define RG_GUI_HIDE_DEBUG_MENU      1
 #define RG_GUI_LANG_IN_ABOUT_MENU   1
+/* "显示但没做"的项一并隐藏（用户拍板 2026-10）：
+ * CRC 缓存=封面索引，后台自动无需用户碰；时钟/时区=无网络无 RTC，时间不准。 */
+#define RG_GUI_HIDE_CRC_CACHE       1
+#define RG_GUI_HIDE_CLOCK           1
 
 
 /****************************************************************************

@@ -1802,7 +1802,9 @@ void rg_gui_options_menu(void)
     const rg_gui_option_t misc_options[] = {
         {0, _("Font type"),     "-", RG_DIALOG_FLAG_NORMAL, &font_type_cb},
         {0, _("Theme"),         "-", RG_DIALOG_FLAG_NORMAL, &theme_cb},
+#ifndef RG_GUI_HIDE_CLOCK   /* claw4 无网络无 RTC，时间不准 ⇒ 时钟与时区一起隐藏（用户拍板 2026-10） */
         {0, _("Show clock"),    "-", RG_DIALOG_FLAG_NORMAL, &show_clock_cb},
+#endif
         #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
         /* "Touch buttons"（关闭虚拟按键）暂时屏蔽：蓝牙手柄支持之前，触摸是这台设备
          * 唯一的输入源，关掉就等于把用户困住（见 rg_touch_overlay.c 强制 visible=true 的注释）。
@@ -1810,7 +1812,9 @@ void rg_gui_options_menu(void)
         {0, _("Touch opacity"),  "-", RG_DIALOG_FLAG_NORMAL, &touch_opacity_cb},
         {0, _("Touch skin"),     "-", RG_DIALOG_FLAG_NORMAL, &touch_skin_cb},
         #endif
+#ifndef RG_GUI_HIDE_CLOCK   /* 时钟都隐藏了，时区没有存在的意义 */
         {0, _("Timezone"),      "-", RG_DIALOG_FLAG_NORMAL, &timezone_cb},
+#endif
         {0, _("Language"),      "-", RG_DIALOG_FLAG_NORMAL, &language_cb},
         #ifdef RG_GPIO_LED // Only show disk LED option if disk LED GPIO pin is defined
         {0, _("LED options"),   NULL, RG_DIALOG_FLAG_NORMAL, &led_indicator_cb},
