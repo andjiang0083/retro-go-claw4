@@ -1041,4 +1041,66 @@ static const char *translations[][RG_LANG_MAX] =
         [RG_LANG_ZH] = "此程序没有可调整的选项。",
     },
     // end of rg_system.c
+    // begin of launcher (claw4 中文支持, 2026-10): FR 暂复制英文，待补
+    {
+        [RG_LANG_EN] = "Loading...",
+        [RG_LANG_FR] = "Loading...",
+        [RG_LANG_ZH] = "加载中...",
+    },
+    {
+        [RG_LANG_EN] = "List empty",
+        [RG_LANG_FR] = "List empty",
+        [RG_LANG_ZH] = "列表为空",
+    },
+    {
+        [RG_LANG_EN] = "Emulator core missing",
+        [RG_LANG_FR] = "Emulator core missing",
+        [RG_LANG_ZH] = "缺少模拟器核心",
+    },
+    {
+        [RG_LANG_EN] = "Emulator core not registered",
+        [RG_LANG_FR] = "Emulator core not registered",
+        [RG_LANG_ZH] = "模拟器核心未注册",
+    },
+    {
+        [RG_LANG_EN] = "Nintendo Entertainment System",
+        [RG_LANG_FR] = "Nintendo Entertainment System",
+        [RG_LANG_ZH] = "FC 红白机",
+    },
+    {
+        [RG_LANG_EN] = "Super Nintendo",
+        [RG_LANG_FR] = "Super Nintendo",
+        [RG_LANG_ZH] = "SFC 超级任天堂",
+    },
+    {
+        [RG_LANG_EN] = "Nintendo Gameboy",
+        [RG_LANG_FR] = "Nintendo Gameboy",
+        [RG_LANG_ZH] = "GB 掌机",
+    },
+    {
+        [RG_LANG_EN] = "Nintendo Gameboy Color",
+        [RG_LANG_FR] = "Nintendo Gameboy Color",
+        [RG_LANG_ZH] = "GBC 彩屏掌机",
+    },
+    {
+        [RG_LANG_EN] = "Nintendo Gameboy Advance",
+        [RG_LANG_FR] = "Nintendo Gameboy Advance",
+        [RG_LANG_ZH] = "GBA 游戏机",
+    },
+    {
+        [RG_LANG_EN] = "Nintendo Game & Watch",
+        [RG_LANG_FR] = "Nintendo Game & Watch",
+        [RG_LANG_ZH] = "任天堂掌中手表游戏",
+    },
+    {
+        [RG_LANG_EN] = "Screen orientation",
+        [RG_LANG_FR] = "Screen orientation",
+        [RG_LANG_ZH] = "屏幕方向",
+    },
+    {
+        [RG_LANG_EN] = "Storage mount failed.\nMake sure the card is FAT32.",
+        [RG_LANG_FR] = "Storage mount failed.\nMake sure the card is FAT32.",
+        [RG_LANG_ZH] = "存储挂载失败。\n请确认 SD 卡为 FAT32 格式。",
+    },
+    // end of launcher
 };

@@ -121,7 +121,21 @@ void rg_gui_init(void)
     //        because of how this is defined in config.h. It should be documented somewhere...
     gui.margins = (__typeof__(gui.margins))RG_SCREEN_SAFE_AREA;
     gui.draw_buffer = get_draw_buffer(gui.screen_width, 18, C_BLACK);
-    rg_gui_set_language_id(rg_settings_get_number(NS_GLOBAL, SETTING_LANGUAGE, RG_LANG_EN));
+#ifndef RG_GUI_DEFAULT_LANGUAGE
+#define RG_GUI_DEFAULT_LANGUAGE RG_LANG_EN   /* 未配置的目标保持英文（主干行为零变化） */
+#endif
+#ifdef RG_GUI_FORCE_LANGUAGE
+    /* claw4 暂无语言设置 UI ⇒ NVS 里存过英文的老机器会永远英文。
+     * 一次性迁移：把存量 Language 翻成本目标默认语言，用 LangForced 标记防反复覆盖
+     * （将来加了 UI，用户改过就写 LangForced=已选+1 来接管）。
+     * ★ 只有显式定义 RG_GUI_FORCE_LANGUAGE 的目标生效——其他目标零 NVS 动作。 */
+    if (rg_settings_get_number(NS_GLOBAL, "LangForced", 0) != RG_GUI_FORCE_LANGUAGE + 1)
+    {
+        rg_settings_set_number(NS_GLOBAL, SETTING_LANGUAGE, RG_GUI_FORCE_LANGUAGE);
+        rg_settings_set_number(NS_GLOBAL, "LangForced", RG_GUI_FORCE_LANGUAGE + 1);
+    }
+#endif
+    rg_gui_set_language_id(rg_settings_get_number(NS_GLOBAL, SETTING_LANGUAGE, RG_GUI_DEFAULT_LANGUAGE));
     rg_gui_set_font(rg_settings_get_number(NS_GLOBAL, SETTING_FONTTYPE, RG_FONT_VERA_11));
     rg_gui_set_theme(rg_settings_get_string(NS_GLOBAL, SETTING_THEME, NULL));
     gui.show_clock = rg_settings_get_boolean(NS_GLOBAL, SETTING_CLOCK, false);
@@ -1872,12 +1886,22 @@ void rg_gui_about_menu(void)
         {0, _("Version"), (char *)app->version, RG_DIALOG_FLAG_MESSAGE, NULL},
         {0, _("Date"), (char *)app->buildDate, RG_DIALOG_FLAG_MESSAGE, NULL},
         {0, _("Target"), (char *)RG_TARGET_NAME, RG_DIALOG_FLAG_MESSAGE, NULL},
+#ifndef RG_GUI_HIDE_WEBSITE
         {0, _("Website"), (char *)RG_PROJECT_WEBSITE, RG_DIALOG_FLAG_MESSAGE, NULL},
+#endif
         RG_DIALOG_SEPARATOR,
         {4, _("Options"), NULL, have_option_btn ? RG_DIALOG_FLAG_HIDDEN : RG_DIALOG_FLAG_NORMAL , NULL},
         // {1, _("View credits", NULL, RG_DIALOG_FLAG_NORMAL, NULL},
+#ifndef RG_GUI_HIDE_DEBUG_MENU
         {2, _("Debug menu"), NULL, RG_DIALOG_FLAG_NORMAL, NULL},
+#endif
         {3, _("Reset settings"), NULL, RG_DIALOG_FLAG_NORMAL, NULL},
+#ifdef RG_GUI_LANG_IN_ABOUT_MENU
+        /* 语言放一级菜单最后（claw4 拍板）：触摸机藏进 Options 二级=没有入口。
+         * language_cb 自带三选弹窗+落盘；LangForced 迁移标记已在，用户改过不会被首刷覆盖。
+         * ★ 其他目标未定义该宏 ⇒ About 菜单逐字不变（tab5 的 Language 仍在 Options）。 */
+        {0, _("Language"), "-", RG_DIALOG_FLAG_NORMAL, &language_cb},
+#endif
         RG_DIALOG_END,
     };
 

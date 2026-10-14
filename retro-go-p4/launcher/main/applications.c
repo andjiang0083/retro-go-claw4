@@ -714,7 +714,7 @@ void applications_init(void)
     {
 #if defined(RG_SINGLE_APP)
         RG_LOGE("No application registered although the core is compiled into this image (build problem)!\n");
-        rg_gui_alert("Emulator core not registered",
+        rg_gui_alert(_("Emulator core not registered"),
                      "这是构建/安装异常：单 app 镜像应自带核心。\n请重新刷写完整镜像。\n\n"
                      "Build/install problem: a single-app image carries its own core.\n"
                      "Please reflash the full image.");
@@ -722,7 +722,7 @@ void applications_init(void)
         RG_LOGE("No emulator core partition found: this is a dual-app build, so the core lives in its\n"
                 "own partition. If it was installed by an installer that only handles a single app\n"
                 "image (e.g. M5Launcher), only the menu got installed.\n");
-        rg_gui_alert("Emulator core missing",
+        rg_gui_alert(_("Emulator core missing"),
                      "现在只有菜单，没装上模拟器核心分区。\n"
                      "若你是用 M5Launcher 装的：请改装「M5Launcher 专用单 app 包」\n"
                      "（文件名带 launcher-singleapp）。\n"

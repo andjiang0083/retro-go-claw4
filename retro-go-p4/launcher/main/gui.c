@@ -67,8 +67,8 @@ tab_t *gui_add_tab(const char *name, const char *desc, void *arg, void *event_ha
     tab_t *tab = calloc(1, sizeof(tab_t));
 
     snprintf(tab->name, sizeof(tab->name), "%s", name);
-    snprintf(tab->desc, sizeof(tab->desc), "%s", desc);
-    sprintf(tab->status[1].left, "Loading...");
+    snprintf(tab->desc, sizeof(tab->desc), "%s", desc);   /* 存英文原文；翻译在绘制点做（避免语言初始化顺序问题） */
+    sprintf(tab->status[1].left, _("Loading..."));
 
     tab->event_handler = event_handler;
     tab->initialized = false;
@@ -365,7 +365,7 @@ void gui_scroll_list(tab_t *tab, scroll_whence_t mode, int arg)
     if (list_length > 0 && list->items[new_cursor].arg)
         sprintf(tab->status[0].left, "%d / %d", (new_cursor + 1) % 10000, list_length % 10000);
     else
-        strcpy(tab->status[0].left, "List empty");
+        strcpy(tab->status[0].left, _("List empty"));
 
     // if (new_cursor != old_cursor)
     {
@@ -487,7 +487,7 @@ void gui_draw_header(tab_t *tab, int offset)
          * 退回 1×（39px，与菜单同字号）后约 538px，连 LOGO 偏移 54px 一共 592px，宽高都装得下；
          * 其余 UI 的字号（RG_GUI_FONT_SCALE=3）一律不动。同时给出可用宽度，
          * 万一以后有更长的 desc 也会在框内截断，不会画到屏幕外。 */
-        rg_gui_draw_text(LOGO_WIDTH + 8, offset + 8, gui.width - (LOGO_WIDTH + 8), tab->desc,
+        rg_gui_draw_text(LOGO_WIDTH + 8, offset + 8, gui.width - (LOGO_WIDTH + 8), _(tab->desc),
                          gui.theme->foreground, C_TRANSPARENT, 0);
 }
 

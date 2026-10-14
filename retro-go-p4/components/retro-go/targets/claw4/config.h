@@ -18,6 +18,15 @@
 #define RG_ORIENT_SWITCH            0
 /* 背光默认拉满：NV3051F 的 DCS 亮度上限低于常见屏，默认 80% 在真机上偏暗 */
 #define RG_DISPLAY_DEFAULT_BACKLIGHT 100
+/* Claw4 默认中文（面向国内用户；RG_LANG_ZH=2）。新机器首刷即中文；
+ * 老机器由下面 FORCE 一次性迁移（claw4 暂无语言设置 UI，用户改不了）。 */
+#define RG_GUI_DEFAULT_LANGUAGE     RG_LANG_ZH
+/* claw4 没有语言设置 UI ⇒ 强制迁移存量 NVS 一次到中文（rg_gui.c 消费，见 LangForced）。 */
+#define RG_GUI_FORCE_LANGUAGE       RG_LANG_ZH
+/* 一级菜单（关于）瘦身：去 Website、屏蔽 Debug menu、语言提到最后（用户拍板 2026-10）。 */
+#define RG_GUI_HIDE_WEBSITE         1
+#define RG_GUI_HIDE_DEBUG_MENU      1
+#define RG_GUI_LANG_IN_ABOUT_MENU   1
 
 
 /****************************************************************************
