@@ -87,14 +87,14 @@
  * 游戏窗仍是 **720×480 居中**（x[280,1000) y[120,600)），四周留白全给虚拟按键。
  *
  * 两种方向的差别**只有四处**：逻辑画布尺寸 / 驱动映射方向 / 键位表 / 视口上限；
- * 核心、缩放、滤镜、存档、封面完全共用。详见 docs/ORIENTATION-SWITCH-EVAL.md。
+ * 核心、缩放、滤镜、存档、封面完全共用。详见内部文档 ORIENTATION-SWITCH-EVAL，不随本仓库发布。
  *
  * 构建横屏镜像：RG_TAB5_ORIENTATION=1 tools/build-tab5-skin.sh
  * （⚠ 构建脚本每次都会显式传 0/1 —— CMake 缓存变量是"粘"的，不显式传会串味。） */
 
 /* 【PPA 传输模式实验开关】2026-10-10，横屏驱动（mipi_dsi_tab5.h）专用。
  * 目的：回答"按块 PPA 慢 25 倍"里有多少是 blocking 的等待/提交成本、多少是硬件本体
- * （方案与判据见 docs/SPEC-PPA-NONBLOCK-EXPERIMENT.md）。
+ * （方案与判据见内部文档 SPEC-PPA-NONBLOCK-EXPERIMENT，不随本仓库发布）。
  *   0 = PPA 关（**默认，= 现状**，CPU 转置；发行/日常行为零变化）
  *   1 = 按块 PPA **非阻塞**（事件回调 semaphore + 1 深流水线；叠加层推迟到收块之后合成）
  *   2 = 按块 PPA **BLOCKING**（= 当年 25x 那个形态，用作"同配置对照"，把等待成本单独拆出来）

@@ -255,7 +255,7 @@ static bool claw4_audio_submit(const rg_audio_frame_t *frames, size_t count)
 
     if (count > tx_buf_frames)
     {
-        /* 中间缓冲放 PSRAM（内部 SRAM 只剩几百字节，见 docs/CLAW4-INTERNAL-HEAP-PLAN.md） */
+        /* 中间缓冲放 PSRAM（内部 SRAM 只剩几百字节，见内部文档 CLAW4-INTERNAL-HEAP-PLAN，不随本仓库发布） */
         int16_t *nb = (int16_t *)heap_caps_realloc(tx_buf, count * 2 * sizeof(int32_t),
                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!nb)

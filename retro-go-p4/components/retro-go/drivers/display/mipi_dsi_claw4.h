@@ -119,14 +119,24 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 1   /* ✓ 2026-10-11 深夜已收口：三项判据全绿，证据与复跑方法见 docs/CLAW4-PPA-VALIDATION.md。
-                                       *  · 历史事故（勿重犯）：BLOCKING 模式下"配置被接受但永不完成"会**永久阻塞、不返回错误码**
-                                       *    ⇒ 游戏里按 MENU（GUI 推 339/323 宽小块）整机卡死（其后 63 秒全 0 帧、无 panic）。
-                                       *    现形态 = 非阻塞 + 完成回调 + 有界等待(CLAW4_PPA_DRAIN_TIMEOUT_MS) + 超时永久停用
-                                       *    该通路并落回 CPU；守卫只放"整宽 left=0"的界面块进 PPA，GUI 小块直接走 CPU。
-                                       *    真机实测：MENU 注入回归 GREEN（MENU#2 后 FPS 回 61），稳态零超时。
-                                       *  · 颜色映射已定案：运行期自检自动选出 (rgb_swap=0, byte_swap=1) —— 合成图四组合中
-                                       *    maxdiff=7 唯一达标且同序最优；rs=1 会把 RED f800→0018e0 彻底错乱。 */
+#define CLAW4_PPA_CONVERT 1   /* ✓ 2026-10-15 复核后维持开启（真机取证，数据内联如下）：
+                                       *  · v0.4.13 / MAC 30:ed:a0:e1:8c:5a，四组合颜色自检原始日志：
+                                       *      rs=0 bs=0 maxdiff=248 | rs=1 bs=0 maxdiff=247
+                                       *      rs=0 bs=1 maxdiff=  7 ✅唯一达标 | rs=1 bs=1 maxdiff=247
+                                       *    ★选定 rgb_swap=0 byte_swap=1；真实块 claw4-ppa-real maxdiff=0 ≤ TOL(8)。
+                                       *  · PPA 确实在加速：xpose=4ms/blocks=2；关掉后 xpose=53ms/blocks=25、
+                                       *    msync 0->7，待机 FPS **106 -> 50**（同机对照）。故不关。
+                                       *  · ⚠ 唯一待修（spike/claw4-ppa）：开机 y>=128 前几块
+                                       *    `PPA convert failed: ESP_FAIL (w=720 rows=32)` x3 后落回 CPU，稳态正常。
+                                       *    假设：H1 非阻塞流水线未排空即提交 / H2 块地址对齐阈值 /
+                                       *    H4 "整宽 left=0" 守卫漏判。（H3 字节序已由上面的四组合矩阵排除）
+                                       *  · 引用纪律：本仓库 .gitignore:57-67 有意不发布 SPEC/HANDOFF/VALIDATION
+                                       *    类内部文档 ⇒ 代码注释**不要再引用它们的路径**（对公开仓库永远悬空）。
+                                       *    可核验锚点用 commit sha 或 Release notes：v0.4.13 release。
+                                       *  · 历史事故（仍有效，勿重犯）：BLOCKING 模式下"配置被接受但永不完成"会
+                                       *    永久阻塞、不返回错误码 ⇒ 游戏里按 MENU（GUI 推 339/323 宽小块）整机卡死。
+                                       *    若改动本通路：必须保持非阻塞 + 完成回调 + 有界等待
+                                       *    (CLAW4_PPA_DRAIN_TIMEOUT_MS) + 超时永久停用，守卫只放整宽 left=0 的块。 */
 #endif
 /* ★ 这三个开关必须定义在所有使用点之前（2026-10-11 深夜踩过：开关定义在使用点之后 ⇒
  *   `#if CLAW4_PPA_NONBLOCK` 在未定义处按 0 求值 ⇒ 注册回调那段被**静默跳过**、
@@ -182,6 +192,16 @@ static bool claw4_ppa_done_isr(ppa_client_handle_t cli, ppa_event_data_t *ev, vo
         xSemaphoreGiveFromISR(claw4_ppa_done_sem, &hp);
     return hp == pdTRUE;
 }
+#else   /* CLAW4_PPA_CONVERT == 0 —— 2026-10-15 补：此前关掉 PPA **编不过**（F7）
+        * 因为 drain 前置声明与两个 PERF 变量都藏在这个 #if 里，而调用/打印点在守卫外
+        * （:854 lcd_sync 调 drain、:912 static 定义连锁、:950 PERF 行打印 rgb/bsw）。
+         * 桩只保证形态可编译与日志字段存在，不参与任何硬件动作。
+         * ★ 教训：drain 只能给**前置声明** —— 真定义在 :919 且不在本守卫内（函数体自带
+         *   #if CLAW4_PPA_CONVERT && CLAW4_PPA_NONBLOCK，关时天然是空函数）；
+         *   在此再定义会撞 redefinition of 'claw4_ppa_drain'（本轮实测）。 */
+static int  claw4_ppa_rgb_swap  = CLAW4_PPA_RGB_SWAP;   /* 仅供 PERF 行打印 */
+static int  claw4_ppa_byte_swap = CLAW4_PPA_BYTE_SWAP;
+static void claw4_ppa_drain(void);                       /* 定义见 :919，关时为空函数 */
 #endif
 
 
@@ -241,7 +261,7 @@ static inline uint16_t claw4_swap16(uint16_t v)
  *   原诊断"逐像素 3 次单字节写 PSRAM = 35 周期/像素的元凶"被证伪：
  *   cache 本就把字节写聚合成整行写回，字宽不是瓶颈；真正的量级是**每帧搬运字节数**
  *   （2.5MB/帧 ÷ 24.7ms ≈ 101MB/s ≈ 本机 PSRAM 顺序带宽）⇒ 要走"少搬"路线（融合缩放+展开），
- *   不是"搬得更宽"。详见 docs/CLAW4-P3-FPS.md。 */
+ *   不是"搬得更宽"。详见内部文档 CLAW4-P3-FPS（按 .gitignore 不随本仓库发布）。 */
 #define CLAW4_XPOSE_WORDS 0
 #endif
 #ifndef CLAW4_XPOSE_SELFCHECK
