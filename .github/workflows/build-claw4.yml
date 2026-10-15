@@ -122,7 +122,8 @@ jobs:
       - name: Portability gate (no machine-local absolute paths)
         run: |
           set -euo pipefail
-          HITS=$(git grep -l '/Users/\|/home/' -- ':!vendor' ':!.github' ':*.gitignore' || true)
+          # 排除必须用**精确 pathspec**：`:*.gitignore` 不生效（会把自己判成命中，CI run #1 即栽在此）。
+          HITS=$(git grep -l '/Users/\|/home/' -- ':!vendor' ':!.github' '!:*.md' ':!.gitignore' || true)
           [ -z "$HITS" ] || { echo "::error::跟踪文件含本机绝对路径："; echo "$HITS"; exit 1; }
           # dependencies.lock 是生成物（记的是生成机绝对路径），必须不被跟踪
           if git ls-files --error-unmatch retro-go-p4/dependencies.lock >/dev/null 2>&1; then
