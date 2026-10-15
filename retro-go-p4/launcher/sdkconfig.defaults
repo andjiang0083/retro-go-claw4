@@ -1,4 +1,0 @@
-
-# Claw4 钉死 flash size = 16MB（回滚到 v0.4.11 时人工保留；merged 镜像头 nibble 必须全=4）
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
