@@ -57,7 +57,7 @@ if [ "$DO_PUBLISH" != "1" ]; then
   [ "$DO_COMMIT" = "1" ] || echo "  0) （工作区若有改动需先 --commit）"
   echo "  1) git tag ${VER}   # claw4 HEAD，主干零位移"
   echo "  2) IDF v5.5 钉版重编: rg_tool.py --target claw4 --no-networking build-img launcher gbsp"
-  echo "  3) 三点门禁: @0x2000/@0x10000/@0x100000 flash-size nibble 一致(4=16MB) + @0x8000 aa50 + 分区表对基线"
+  echo "  3) 三点门禁: @0x2000/@0x10000/@0x100000 flash-size nibble 一致且等于 targets/claw4/sdkconfig 声明值(Claw4=32MB⇒5) + @0x8000 aa50 + 分区表对基线"
   echo "  4) cp merged img → releases/claw4/${BIN_NAME} (+ .sha256, cmp 字节一致)"
   echo "  5) git push origin claw4 && git push origin ${VER}   # 只推这两个 ref"
   echo "  6) GitHub Release ${VER}: 上传 ${BIN_NAME} + .sha256（钥匙串 token, API）"
@@ -83,10 +83,19 @@ data = open(img,'rb').read()
 def nib(off): return (data[off+3] >> 4) & 0xF
 nibs = {hex(o): nib(o) for o in (0x2000, 0x10000, 0x100000)}
 assert len(set(nibs.values())) == 1, f"三段 flash-size nibble 不一致: {nibs}"
-assert nibs['0x2000'] == 4, f"flash-size nibble={nibs['0x2000']}（期望 4=16MB；32MB 漂移必崩，见经验§417）"
+# 期望值来自唯一真源：targets/claw4/sdkconfig（Claw4 = 32MB ⇒ nibble=5）。
+# 切勿硬编码 nibble：写死过 4(16MB) 曾把正确的 32MB 镜像判成不合格。
+import re
+SC = "retro-go-p4/components/retro-go/targets/claw4/sdkconfig"
+sc = open(SC, encoding="utf-8", errors="replace").read()
+m = re.search(r'CONFIG_ESPTOOLPY_FLASHSIZE="(\d+)MB"', sc)
+assert m, f"{SC} 未声明 CONFIG_ESPTOOLPY_FLASHSIZE"
+NIB = {"1":0,"2":1,"4":2,"8":3,"16":4,"32":5,"64":6,"128":7}
+exp = NIB[m.group(1)]
+assert nibs['0x2000'] == exp, f"flash-size nibble={nibs['0x2000']}，但 {SC} 声明 {m.group(1)}MB（期望 nibble={exp}）"
 assert data[0x8000:0x8002] == b'\xaa\x50', "分区表 magic @0x8000 缺失"
 pt = data[0x8000:0xc000]
-print(f"  ✓ 三点门禁 nibble=4(16MB) / aa50 / 分区表 sha256={hashlib.sha256(pt).hexdigest()[:12]}")
+print(f"  ✓ 三点门禁 nibble={exp}({m.group(1)}MB, 源自 {SC}) / aa50 / 分区表 sha256={hashlib.sha256(pt).hexdigest()[:12]}")
 PYEOF
 
 # ── ⑤ 打包（产物不入库；.gitignore 已覆盖 releases/）─────────────────────

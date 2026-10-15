@@ -1,5 +1,0 @@
-# Claw4 钉死 flash size = 16MB（真机事故教训：merged 镜像头 nibble 必须全=4）。
-# sdkconfig 本体被 .gitignore（/*/sdkconfig），此 defaults 是唯一进 git 的持久钉法，
-# idf.py 首次生成 sdkconfig 时读取。改这里前先跑 tools/ 门禁三查。
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
