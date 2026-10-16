@@ -170,9 +170,9 @@
 #define RG_ENABLE_TOUCH_GAMEPAD 1
 /* 测量用：合成 A 键（2s 一次）。用户定义的负载路径：launcher 里按 A 进游戏 ⇒ 游戏内 A=跳。
  * ★ 测量构建专用；测完必须回 0（"测量开关不许过夜"，见 CLAW4-P3-FPS.md）。默认 0。 */
-#define RG_TEST_AUTOPRESS_A_MS 0 
-#define RG_TEST_AUTOPRESS_MENU2_AT_MS 0 
-#define RG_TEST_AUTOPRESS_MENU_AT_MS 0 
+#define RG_TEST_AUTOPRESS_A_MS 0         /* ← 交付版：自动按键关（测量时 2000~3000） */
+#define RG_TEST_AUTOPRESS_MENU2_AT_MS 0
+#define RG_TEST_AUTOPRESS_MENU_AT_MS 0
 
 
 /* ── 开机 recovery 组合键：**关掉**（0 = 永不触发）─────────────────────────
@@ -219,7 +219,8 @@
  * 为什么需要：真机上没人点屏，而"选 app → 选 ROM"要两次输入；每轮刷机后要能自己复现负载。
  * 与 RG_GBA_DIAG 分开：后者连带脚本按键/诊断刷屏，会换掉测量负载。交付前改回 0。 */
 #ifndef RG_TEST_BOOTROM
-#define RG_TEST_BOOTROM 0
+#define RG_TEST_BOOTROM 0   /* ← 交付版：无人值守钩子全关（测量时才置 1 + 指定 RG_TEST_BOOTROM_NS）
+                             * 参数化后可自动进任意机：gba→gbsp；gb/gbc→retro-core */
 #endif
 
 /* 虚拟按键可视层：把命中区画到屏幕上（0 = 完全不编，回到"盲区"模式）。
