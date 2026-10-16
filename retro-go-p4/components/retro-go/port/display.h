@@ -36,39 +36,28 @@
 #define RG_DISPLAY_DRIVER_SDL2       99   /* 宿主（macOS/Linux 预览） */
 #define RG_DISPLAY_DRIVER_DUMMY      100  /* 无显示（"以上都不是"） */
 
-/* ── 契约本体：这 8 个符号必须由本 TU 的驱动实现 ─────────────────────────────
- * 参数类型逐字对齐（改名/改类型 ⇒ 编译期报错）。 */
-static void      lcd_init(void);
-static void      lcd_deinit(void);
-static void      lcd_sync(void);
-static void      lcd_set_rotation(int rotation);
-static void      lcd_set_backlight(float percent);
-static void      lcd_set_window(int left, int top, int width, int height);
-static uint16_t *lcd_get_buffer(size_t length);
-static void      lcd_send_buffer(uint16_t *buffer, size_t length);
-
-/* ── 牙齿：逐个断言"符号存在 + 签名逐字一致" ─────────────────────────────────
- * 用 __typeof__ + __builtin_types_compatible_p 做**纯编译期**检查：
- *   缺符号（名字写错/漏实现）⇒ 未声明标识符报错；
- *   签名不符（参数类型/返回类型改了）⇒ 断言失败报错。
- * 为什么不用"取地址"（那样对未定义符号更狠）：取地址会把本来可被优化掉的函数**钉住**，
- * 让 .data/.text 长出字节 —— 本轮的硬判据是"改动前后 .obj 剥调试后逐字节相同"，
- * 取地址会破坏它，所以这里选零代码生成的写法。
- * 已知边界（诚实写清）：**声明了但从未定义、且没有任何调用点**的函数不会报错 ——
- * 这种函数本来就该删（当前 8 个都有调用点，见 rg_display.c）。 */
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_init), void (void)),
-               "显示驱动契约：缺 lcd_init 或签名应为 void(void)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_deinit), void (void)),
-               "显示驱动契约：缺 lcd_deinit 或签名应为 void(void)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_sync), void (void)),
-               "显示驱动契约：缺 lcd_sync 或签名应为 void(void)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_rotation), void (int)),
-               "显示驱动契约：缺 lcd_set_rotation 或签名应为 void(int)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_backlight), void (float)),
-               "显示驱动契约：缺 lcd_set_backlight 或签名应为 void(float)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_window), void (int, int, int, int)),
-               "显示驱动契约：缺 lcd_set_window 或签名应为 void(int,int,int,int)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_get_buffer), uint16_t *(size_t)),
-               "显示驱动契约：缺 lcd_get_buffer 或签名应为 uint16_t *(size_t)");
-_Static_assert(__builtin_types_compatible_p(__typeof__(lcd_send_buffer), void (uint16_t *, size_t)),
-               "显示驱动契约：缺 lcd_send_buffer 或签名应为 void(uint16_t*,size_t)");
+/* ── 契约宏：由**驱动自己**在 8 个函数都定义之后调用一次 ─────────────────────
+ * 为什么必须放在"定义之后"（这是本契约的牙齿所在）：宏里用 `__typeof__(lcd_init)` 这类写法
+ * 逐个引用这些名字，而**本头文件刻意不预先声明它们** ⇒ 驱动一旦把它们改名/漏实现，
+ * 展开点就找不到标识符 ⇒ **编译期直接红**。
+ * 代价为零：纯静态断言，不生成任何代码（已用"剥 DWARF 后 .obj 逐字节相同"验证过）。
+ *
+ * 用法（四份驱动都在文件末尾调用）：`RG_DISPLAY_CONTRACT();`
+ * ⚠ 漏调用宏就失去检查 —— P2 的隔离门禁脚本会 grep 这四份文件必须含该调用。 */
+#define RG_DISPLAY_CONTRACT()                                                                     \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_init), void (void)),               \
+                   "显示驱动契约：缺 lcd_init 或签名应为 void(void)");                            \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_deinit), void (void)),             \
+                   "显示驱动契约：缺 lcd_deinit 或签名应为 void(void)");                          \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_sync), void (void)),               \
+                   "显示驱动契约：缺 lcd_sync 或签名应为 void(void)");                            \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_rotation), void (int)),        \
+                   "显示驱动契约：缺 lcd_set_rotation 或签名应为 void(int)");                     \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_backlight), void (float)),     \
+                   "显示驱动契约：缺 lcd_set_backlight 或签名应为 void(float)");                  \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_set_window), void (int, int, int, int)), \
+                   "显示驱动契约：缺 lcd_set_window 或签名应为 void(int,int,int,int)");           \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_get_buffer), uint16_t *(size_t)),  \
+                   "显示驱动契约：缺 lcd_get_buffer 或签名应为 uint16_t *(size_t)");              \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(lcd_send_buffer), void (uint16_t *, size_t)), \
+                   "显示驱动契约：缺 lcd_send_buffer 或签名应为 void(uint16_t*,size_t)")

@@ -75,3 +75,6 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
     if (tab5_dispatch_landscape()) tab5l_send_buffer(buffer, length);
     else tab5p_send_buffer(buffer, length);
 }
+
+/* 契约自检（必须放在 8 个 lcd_* 定义之后 —— 见 port/display.h 的说明） */
+RG_DISPLAY_CONTRACT();

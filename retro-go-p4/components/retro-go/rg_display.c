@@ -5,6 +5,7 @@
  */
 
 #include "rg_system.h"
+#include "port/display.h"        /* 驱动代号（RG_DISPLAY_DRIVER_*）：下面 #if 不再写魔法数字 */
 #include "rg_display.h"
 #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
 #include "rg_touch_overlay.h"   /* 叠加层改内容后请求"整屏重推"（见 write_update） */
@@ -158,18 +159,18 @@ static void lcd_set_window(int left, int top, int width, int height);
 static inline uint16_t *lcd_get_buffer(size_t length);
 static inline void lcd_send_buffer(uint16_t *buffer, size_t length);
 
-#if RG_SCREEN_DRIVER == 0 /* ILI9341/ST7789 */
+#if RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_ILI9341 /* ILI9341/ST7789 */
 #include "drivers/display/ili9341.h"
-#elif RG_SCREEN_DRIVER == 2 || RG_SCREEN_DRIVER == 3 || RG_SCREEN_DRIVER == 4
+#elif RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_L || RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_P || RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_BOTH
 /* Tab5（含 0.4.9 单 app 双方向）：两份驱动同编，运行时按方向选一份。
  * 契约：下面所有 lcd_* 调用点一字不改 —— 分发层把它们定义成 static inline 转发器。
  * 单方向构建（双 app 形态 / 或单一方向的实验档）走的也是这里，结果与改造前逐字一致。 */
 #include "drivers/display/tab5_dispatch.h"
-#elif RG_SCREEN_DRIVER == 5
+#elif RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_CLAW4
 /* Metalio Claw4（方屏 720×720，单方向、线性 1:1）：一份驱动，**不需要分发层**。
  * 同样契约：本文件里所有 lcd_* 调用点一字不改。 */
 #include "drivers/display/mipi_dsi_claw4.h"
-#elif RG_SCREEN_DRIVER == 99
+#elif RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_SDL2
 #include "drivers/display/sdl2.h"
 #else
 #include "drivers/display/dummy.h"

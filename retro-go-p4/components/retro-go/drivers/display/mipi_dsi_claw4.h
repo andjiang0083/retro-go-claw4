@@ -1519,3 +1519,6 @@ claw4_skip_msync:;
     claw4_pf_report();
     (void)pf_ovl_ran;
 }
+
+/* 契约自检（必须放在 8 个 lcd_* 定义之后 —— 见 port/display.h 的说明） */
+RG_DISPLAY_CONTRACT();

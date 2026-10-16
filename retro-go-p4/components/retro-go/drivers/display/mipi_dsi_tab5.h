@@ -1184,3 +1184,6 @@ static void lcd_set_rotation(int rotation)
     /* 旋转已固定在驱动的映射里（90° CW），此处不额外处理 */
     (void)rotation;
 }
+
+/* 契约自检（必须放在 8 个 lcd_* 定义之后 —— 见 port/display.h 的说明） */
+RG_DISPLAY_CONTRACT();

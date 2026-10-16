@@ -2,8 +2,9 @@
  * ⚠ 本文件会被组件级 glob 编进**所有目标**，所以整段包在驱动号判断里：
  *   非 Tab5 目标编译成空 TU（否则会找不到 mipi_dsi_tab5_p.h / esp_lcd 头）。 */
 #include "rg_system.h"              /* 目标配置（RG_SCREEN_* / RG_TAB5_PPA_MODE / RG_SCREEN_INIT） */
+#include "port/display.h"           /* 驱动代号（RG_DISPLAY_DRIVER_*）：下面 #if 不再写魔法数字 */
 
-#if RG_SCREEN_DRIVER == 2 || RG_SCREEN_DRIVER == 3 || RG_SCREEN_DRIVER == 4
+#if RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_L || RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_P || RG_SCREEN_DRIVER == RG_DISPLAY_DRIVER_TAB5_BOTH
 /* 4 = Tab5 单 app（两份驱动都编，运行时由分发层选）—— 见 targets/tab5/config.h 的说明 */
 #include "drivers/display/tab5_p_api.h"
 /* ⚠ 跨 TU 依赖：竖屏驱动会调用 rg_display.c 的上报函数（过去靠"驱动被 #include 进 rg_display.c

@@ -979,3 +979,6 @@ static void lcd_set_rotation(int rotation)
      * （720x1280 竖屏）。要横屏得换另一份驱动（mipi_dsi_tab5.h）。 */
     (void)rotation;
 }
+
+/* 契约自检（必须放在 8 个 lcd_* 定义之后 —— 见 port/display.h 的说明） */
+RG_DISPLAY_CONTRACT();
