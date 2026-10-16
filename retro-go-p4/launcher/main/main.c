@@ -553,10 +553,16 @@ static void about_handler(rg_gui_option_t *dest)
 /* 2026-10-06 临时：无人值守真机测试 —— 启动器直接启动一个 ROM。
  * 为什么需要：真机上没人点屏幕，而"选 app(gbsp) → 再选 ROM"要两次输入；
  * 直接 rg_system_switch_app 一步进游戏，之后按键时间轴才有意义。验证完删除。 */
+#ifndef RG_TEST_BOOTROM_NS
+#define RG_TEST_BOOTROM_NS "gba"     /* 自动进哪台机（claw4 无人值守测量用）：gba→gbsp；gb/gbc→retro-core */
+#endif
+#ifndef RG_TEST_BOOTROM_EXT
+#define RG_TEST_BOOTROM_EXT RG_TEST_BOOTROM_NS   /* 扩展名过滤，默认与机型同名 */
+#endif
 static char rg_test_boot_rom[RG_PATH_MAX + 1];
 static int rg_test_boot_rom_cb(const rg_scandir_t *entry, void *arg)
 {
-    if (!entry->is_file || !rg_extension_match(entry->basename, "gba"))
+    if (!entry->is_file || !rg_extension_match(entry->basename, RG_TEST_BOOTROM_EXT))
         return RG_SCANDIR_SKIP;
     if (!rg_test_boot_rom[0])
         snprintf(rg_test_boot_rom, sizeof(rg_test_boot_rom), "%s", entry->path);
@@ -564,7 +570,10 @@ static int rg_test_boot_rom_cb(const rg_scandir_t *entry, void *arg)
 }
 static void rg_test_auto_boot_rom(void)
 {
-    const char *cands[] = { RG_BASE_PATH_ROMS "/gba/恶魔城系列（3作）", RG_BASE_PATH_ROMS "/gba" };
+    const char *cands[] = {
+        RG_BASE_PATH_ROMS "/" RG_TEST_BOOTROM_NS "/" "恶魔城系列（3作）",
+        RG_BASE_PATH_ROMS "/" RG_TEST_BOOTROM_NS,
+    };
     /* 2026-10-11：**必须等 SD/存储栈稳定**再交接。实测"开机后立刻 switch_app"时核心侧
      * 会 `Failed to create on-chip LDO power control driver (chan 4)`（SD 供电 LDO），
      * /sd 读不了 ⇒ 核心起不来、卡在沙漏。手动点游戏是同一套 warm handoff，只是中间隔了
@@ -584,7 +593,8 @@ static void rg_test_auto_boot_rom(void)
     }
     RG_LOGW("RG_TEST_BOOTROM: %s (等 %d ms)\n", rg_test_boot_rom[0] ? rg_test_boot_rom : "(none)", tries * 200);
     if (rg_test_boot_rom[0])
-        rg_system_switch_app("gbsp", "gba", rg_test_boot_rom, 0);
+        rg_system_switch_app(strcmp(RG_TEST_BOOTROM_NS, "gba") == 0 ? "gbsp" : "retro-core",
+                             RG_TEST_BOOTROM_NS, rg_test_boot_rom, 0);
 }
 #endif
 
