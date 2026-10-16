@@ -1,4 +1,4 @@
-# 构建产物
+# --- build output / 构建产物 ---
 build/
 */build/
 **/build/
@@ -7,6 +7,7 @@ dependencies.lock.bak
 
 # 误提交的运行输出：本仓根目录曾误提交过 stdout.txt / stderr.txt（2026-10-07 从索引移除）。
 # 发布脚本的排除表里也加了同名 --exclude，两棵树都不会再被带进去。
+# Stray run output: stdout.txt / stderr.txt were committed here by mistake (removed 2026-10-07).
 stdout.txt
 stderr.txt
 
@@ -17,7 +18,27 @@ stderr.txt
 # 防回归门禁：公开仓 CI 的 Portability gate（.github/workflows/build.yml 第 5 步）。
 dependencies.lock
 
-# 日志
+# generated per-app sdkconfig copies (the real, tracked ones live in
+# components/retro-go/targets/<target>/sdkconfig)
+retro-go-p4/*/sdkconfig
+retro-go-p4/*/*/sdkconfig
+
+# 固件镜像 / 备份 / 压缩包（永不入库）
+# --- firmware images / backups / archives (never commit these) ---
+*.img
+dist/
+backup/
+rg-p4.tar.gz
+*.tar.gz
+
+# 构建产物：rg_tool.py 为了绕过 esp-idf 的检查而生成的占位分区表（不属于源码）
+# NOTE: vendor/managed_components/ is intentionally tracked — the project's CMake
+# lists it in EXTRA_COMPONENT_DIRS, so a clean clone must contain it to build.
+partitions.csv
+partitions.bin
+.buildlogs/
+
+# 日志 / logs
 logs/
 *.log
 
@@ -33,26 +54,14 @@ __pycache__/
 *.orig
 *.rej
 
-# 固件镜像 / 备份 / 压缩包（永不入库）
-*.img
-dist/
-backup/
-*.tar.gz
-
-# 构建产物：rg_tool.py 为了绕过 esp-idf 的检查而生成的占位分区表（不属于源码）
-partitions.csv
-partitions.bin
-.buildlogs/
-
 # ── 公开仓内容边界（2026-10-13 清理）──────────────────────────────────────────
 # 本仓只放「产品代码 + 上游文档 + 发布说明」。
 # 规划/实测/笔记、设备备份、调试脚本一律不进公开仓（本地留档 ~/esp32/retro-go-internal/）。
-backup/
-rg-p4.tar.gz
 display-test/
 docs/baseline/
-*.log
-__pycache__/
+docs/archive/
+docs/archive/*.patch
+retro-go-p4/docs/
 # 内部文档的命名约定（SPEC/计划/交接/实测类不公开）
 docs/SPEC-*.md
 docs/HANDOFF-*.md
@@ -64,12 +73,9 @@ docs/CLAW4-INTERNAL-HEAP-PLAN.md
 docs/CLAW4-PPA-VALIDATION.md
 docs/CLAW4-P3-FPS.md
 docs/TAB5-DISPLAY-PATH-BASELINE.md
+docs/TAB5-PORT-STATUS.md
 docs/ORIENTATION-SWITCH-EVAL.md
-docs/baseline/
-retro-go-p4/docs/
-docs/archive/PORTRAIT-TAB5-HANDOFF.md
-docs/archive/*.patch
-docs/archive/
+docs/GBA-CORE-UPGRADE-ASSESSMENT.md
 
 # 发布产物不入库（GitHub Release/商店资产从这里上传，git 历史不带二进制）
 releases/

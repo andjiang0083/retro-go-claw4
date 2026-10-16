@@ -1,0 +1,199 @@
+# .github/workflows/build.yml — retro-go-tab5 构建回归门禁
+#
+# 职责（只有这三件）：
+#   1) 干净克隆 + 全量构建能成功（双 app 与单 app 两种形态；--no-networking，增量构建会掩盖 P4 无射频的配置错误）
+#   2) 产物是「真的 merged 镜像」（三个结构锚点 + 512KB 下限）
+#   3) 仓库里不含「只在一台机器上成立」的绝对路径（别人克隆必须也能构建）
+# 不做：不验证帧率/显示通路/崩溃（无硬件，靠真机看屏 + SD 卡 /crash.log）；不做发布（M5Burner 手动）。
+# 禁止：continue-on-error / 跳过步骤 / 放宽门禁来换绿。
+#
+# 本文件里所有路径、命令、锚点均由 2026-10-07 的实测支撑：
+#   - 干净克隆构建成功：退出码 0、70 秒（18 核）／5.5.4 上 132 秒，两者产物均为 VALID
+#   - CI 实测（run #6，无缓存，双 app + 单 app 两种形态）：整轮 7 分 49 秒 = checkout 51s + 装 IDF 226s
+#     + 双 app 构建 121s + 单 app 构建 54s + 门禁/上传 <5s；产物 artifact 4,180,865 B
+#     （两个合并镜像 2293760 / 2097152 B + 两个 app bin + SHA256SUMS.txt + 两份构建日志）
+#   - 产物真实路径：retro-go-p4/retro-go_<版本>_tab5.img（不是文档里写的 build/tab5-retro-go.img）
+#   - 三锚点：0x2000=E9 / 0x8000=50AA / 0x10020=ABCD5432（与本地发布门禁脚本的判定逐条一致）
+#   - IDF 版本：直接读 $IDF_PATH/tools/cmake/version.cmake 断言（不用间接信号）
+#   - 首跑（run #1）真实教训：被跟踪的 */dependencies.lock 是生成物、记的是生成机的绝对路径
+#     ⇒ 换台机器必然 CMake 报错。已改为不跟踪，并加了第 5 步「可移植性门禁」防回归。
+#   - 次跑（run #2）真实教训：官方 action 只给 IDF_PATH + 工具链，**IDF 自己那几个脚本目录不给**
+#     （rg_tool.py 在非 Windows 上裸调 idf.py / gen_esp32part.py）⇒ 编译全过、Packing 阶段才炸。
+#     已在第 2 步补齐 PATH 并提前断言（真要缺，在第 2 步就红）。
+
+name: build-tab5
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: build-tab5-${{ github.ref }}
+  cancel-in-progress: false   # 保留每次 run 的产物留痕；只在磁盘/分钟数吃紧时才考虑 true
+
+env:
+  # 与开发树 tools/idf-env.sh（~/esp/esp-idf-v5.5 = 5.5.2）一致。
+  # 5.5.4 上也能构建成功，但产出字节不同（同为 2293760 B，约 1.94 MB 字节有差异）。
+  # 版本由第 2 步直接读 version.cmake 断言，不依赖任何间接信号。
+  IDF_VERSION: "v5.5.2"
+
+jobs:
+  build-tab5:
+    name: Build + structure gate (Tab5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── 0. checkout：必须带全部 tag ─────────────────────────────────────
+      # rg_tool.py 用 `git describe --tags --abbrev=5 --dirty --always` 生成 RG_PROJECT_VER 与镜像文件名。
+      # 默认 fetch-depth:1 下该命令只返回裸 commit hash（实测：tags=0、describe 报 No names found）。
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 1. ESP-IDF v5.5.2（官方 action，基于 EIM）───────────────────────
+      # 已核实（读 action 源码 + 本机实跑 eim 激活脚本）：它会把 activate_*.sh -e 的输出按 KEY=VALUE
+      # 解析并用 core.exportVariable() 写入 GITHUB_ENV ⇒ IDF_PATH 在后续 step 可用。
+      # 注意：Linux 默认安装路径是 /tmp/esp/idf（README 写的 /opt/esp/idf 与源码不符）。
+      # 供应链：该 action 的 v1 是**分支**不是 tag，稳定后再 pin 到 commit SHA。
+      - name: Install ESP-IDF ${{ env.IDF_VERSION }}
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: ${{ env.IDF_VERSION }}
+
+      # 无缓存版本（P1）。工具链缓存要放在 install **之前**才有意义，而 EIM 在目标目录已存在时
+      # 是否会短路未验证 —— 留到第二次迭代实测（先量耗时，再决定缓存策略）。
+
+      # ── 2. 环境自检：宁可显式红，不要猜路径 ──────────────────────────────
+      - name: Assert ESP-IDF environment
+        run: |
+          set -euo pipefail
+          [ -n "${IDF_PATH:-}" ] || { echo "::error::IDF_PATH 未被导出（action 行为变了）"; exit 1; }
+          echo "IDF_PATH=$IDF_PATH"
+          [ -x "$IDF_PATH/tools/idf.py" ] || { echo "::error::$IDF_PATH/tools/idf.py 不存在"; exit 1; }
+          command -v idf.py || echo "::warning::PATH 里没有 idf.py（rg_tool.py 需要能直接调用它）"
+          idf.py --version || true
+          PATCH=$(sed -n 's/.*set(IDF_VERSION_PATCH \([0-9]*\)).*/\1/p' "$IDF_PATH/tools/cmake/version.cmake")
+          echo "IDF_VERSION_PATCH=$PATCH"
+          # ESP_IDF_VERSION 只有主次版本（实测输出 5.5），断言补丁号必须读 version.cmake
+          [ "$PATCH" = "2" ] || { echo "::error::期望 IDF 5.5.2，实际 patch=$PATCH"; exit 1; }
+          riscv32-esp-elf-gcc --version | head -n1
+
+          # ⚠ 补 PATH：官方 action 只导出 IDF_PATH 与工具链，**不铺 IDF 自己那几个脚本目录**。
+          # 而 rg_tool.py 在非 Windows 上按**裸命令名**调用它们（:52-57）：
+          #   GEN_ESP32PART_PY="gen_esp32part.py" / ESPTOOL_PY="esptool.py" / PARTTOOL_PY="parttool.py"
+          # run #2 就是死在这里：编译全过、Packing 阶段 `Task failed: [Errno 2] No such file or directory: 'gen_esp32part.py'`。
+          # 下面四个目录抄自本机 `. tools/idf-env.sh` 之后的 PATH（开发环境就是这么跑通的）。
+          for d in tools components/partition_table components/app_update components/espcoredump; do
+            [ -d "$IDF_PATH/$d" ] || { echo "::error::$IDF_PATH/$d 不存在（IDF 布局变了）"; exit 1; }
+            echo "$IDF_PATH/$d" >> "$GITHUB_PATH"
+          done
+
+          # 提前失败：build-img 这条路径真正需要的是 idf.py 与 gen_esp32part.py
+          # （rg_tool.py:121 `idf.py bootloader`、:114 `gen_esp32part.py`）。
+          # 其余几个（esptool.py / parttool.py / idf_monitor.py）只在刷机/监视路径用到，这里只报不拦。
+          NEWPATH="$IDF_PATH/tools:$IDF_PATH/components/partition_table:$IDF_PATH/components/app_update:$PATH"
+          for c in idf.py gen_esp32part.py; do
+            PATH="$NEWPATH" command -v "$c" >/dev/null || { echo "::error::$c 在 PATH 上找不到 —— rg_tool.py 会裸调它"; exit 1; }
+          done
+          for c in esptool.py parttool.py idf_monitor.py; do
+            PATH="$NEWPATH" command -v "$c" >/dev/null || echo "::warning::$c 不在 PATH 上（本 CI 不刷机，允许）"
+          done
+          echo "IDF 脚本齐备：idf.py / gen_esp32part.py"
+
+      # ── 3. 全量构建 ─────────────────────────────────────────────────────
+      - name: Build merged image (launcher + gbsp)
+        working-directory: retro-go-p4
+        run: |
+          set -euo pipefail
+          # partitions.* 是构建期生成物（被 retro-go-p4/.gitignore 忽略），先删掉强制重建
+          rm -f partitions.csv partitions.bin
+          # --no-networking 必填：P4 无射频，sdkconfig 无 CONFIG_ESP_WIFI_*；增量构建会掩盖该错。
+          # set -o pipefail 已保证管道中构建失败会让本 step 变红（无需再取 PIPESTATUS）。
+          python3 rg_tool.py --target tab5 --no-networking build-img launcher gbsp 2>&1 | tee ../build-tab5.log
+
+      # ── 4. 门禁：产物是真 merged（内联断言，不依赖仓库外工具）────────────
+      # 与本地发布门禁脚本的判定逐条一致（已用 5 个真实文件比对过：
+      # 干净克隆构建的 merged、发布件 0.4.7 merged → VALID；截断镜像、抹锚点镜像、
+      # 真·单 app bin → INVALID）。这里内联是为了不在仓内新增第二份"共享工具"，避免双副本漂移。
+      - name: Structure gate (merged image anchors)
+        working-directory: retro-go-p4
+        run: |
+          set -euo pipefail
+          IMG=$(ls retro-go_*_tab5.img | head -n1)
+          [ -n "$IMG" ] || { echo "::error::没找到 retro-go_*_tab5.img"; ls -la; exit 1; }
+          [ -s launcher/build/launcher.bin ] || { echo "::error::launcher.bin 缺失"; exit 1; }
+          [ -s gbsp/build/gbsp.bin ] || { echo "::error::gbsp.bin 缺失"; exit 1; }
+          echo "merged image: $IMG ($(stat -c%s "$IMG") bytes)"
+          python3 -c "import sys;d=open(sys.argv[1],'rb').read();A=[(0x2000,b'\xe9'),(0x8000,b'\xaa\x50'),(0x10020,(0xABCD5432).to_bytes(4,'little'))];bad=[hex(o) for o,m in A if d[o:o+len(m)]!=m];ok=len(d)>=524288 and not bad;print('VALID' if ok else 'INVALID size=%d bad_anchors=%s'%(len(d),bad));sys.exit(0 if ok else 1)" "$IMG"
+          shasum -a 256 "$IMG" | tee ../SHA256SUMS.txt
+          # ⚠ 只列两个合并镜像，不列 launcher.bin/gbsp.bin —— 单 app 构建会**重建**这两个 bin，
+          #   上传时它们已被覆盖（本轮实测：清单里那一行哈希与上传的 bin 对不上）。
+          #   bin 仍然上传供排查，但清单必须只描述"不会被后续步骤改写"的文件。
+
+      # ── 5. 单 app 形态（M5Launcher / 第三方启动器装的形态）──────────────
+      # v0.4.7 起"单 app 合并形态"是**默认发布形态**（第三方启动器只装一个 app，多 app 镜像会丢核心），
+      # 所以它必须和双 app 一起守。实测：2097152 B，同一套结构锚点 VALID。
+      # 同一个 build 目录里从双 app 切到单 app 是支持的（开发树 tools/build-tab5-skin.sh 就这么用），
+      # 但开关必须每次显式传 —— §127：CMake 缓存变量是"粘"的，漏传会混进上一次形态的产物。
+      - name: Build single-app image (M5Launcher form)
+        working-directory: retro-go-p4
+        run: |
+          set -euo pipefail
+          python3 rg_tool.py --target tab5 --no-networking --single-app build-img launcher gbsp 2>&1 | tee ../build-tab5-single.log
+          IMG=$(ls retro-go_*_tab5-single.img | head -n1)
+          [ -n "$IMG" ] || { echo "::error::没找到 retro-go_*_tab5-single.img"; ls -la; exit 1; }
+          echo "single-app image: $IMG ($(stat -c%s "$IMG") bytes)"
+          python3 -c "import sys;d=open(sys.argv[1],'rb').read();A=[(0x2000,b'\xe9'),(0x8000,b'\xaa\x50'),(0x10020,(0xABCD5432).to_bytes(4,'little'))];bad=[hex(o) for o,m in A if d[o:o+len(m)]!=m];ok=len(d)>=524288 and not bad;print('VALID' if ok else 'INVALID size=%d bad_anchors=%s'%(len(d),bad));sys.exit(0 if ok else 1)" "$IMG"
+          shasum -a 256 "$IMG" >> ../SHA256SUMS.txt
+
+      # ── 6. 门禁：仓库里不能有「只在一台机器上成立」的路径 ────────────────
+      # 首跑（run #1）实测：仓库跟踪的 */dependencies.lock 是组件管理器生成物，里面记的是
+      # 生成时那台机器的绝对路径（/Users/<某人>/.../vendor/managed_components/...）。
+      # 在生成它的机器上构建没问题（那个路径真的存在，本项目曾因此一直没发现），
+      # 换台机器/CI 则直接：
+      #   CMake Error: The "path" field in the manifest file ... does not point to a directory
+      # ⇒ 这类文件已改为不跟踪（.gitignore 覆盖，构建时自动重建）。
+      # 本步是防回归门禁：谁再把它提交回来，CI 立刻红。两条断言都机器可判，不靠人记规矩。
+      - name: Portability gate (no machine-specific paths)
+        run: |
+          set -euo pipefail
+          if git grep -nE '/(Users|home)/[A-Za-z0-9._-]+/' -- .; then
+            echo "::error::跟踪文件里出现个人绝对路径 ⇒ 别人克隆后必然构建失败（见上方行号）"
+            exit 1
+          fi
+          if git ls-files | grep -q 'dependencies\.lock$'; then
+            echo "::error::dependencies.lock 被跟踪 —— 它是含机器绝对路径的生成物，必须保持不跟踪"
+            git ls-files | grep 'dependencies\.lock$' | sed 's/^/     /'
+            exit 1
+          fi
+          echo "可移植性门禁通过：无机器专属路径，dependencies.lock 未被跟踪"
+
+      # ── 7. 上传产物（含 SHA256SUMS）──────────────────────────────────────
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tab5-fw-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            retro-go-p4/retro-go_*_tab5.img
+            retro-go-p4/retro-go_*_tab5-single.img
+            retro-go-p4/launcher/build/launcher.bin
+            retro-go-p4/gbsp/build/gbsp.bin
+            SHA256SUMS.txt
+            build-tab5.log
+            build-tab5-single.log
+          if-no-files-found: warn   # 构建失败时可能确实没产物；上传步骤本身不该变成第二个红点
+
+      # ── 8. 观测（不改结论）：磁盘与耗时，供下一轮决定是否上缓存 ───────────
+      - name: Disk + timing report
+        if: always()
+        run: |
+          df -h / || true
+          du -sh retro-go-p4/launcher/build retro-go-p4/gbsp/build "${IDF_PATH:-/tmp}" 2>/dev/null || true
+          tail -n 30 build-tab5.log 2>/dev/null || true

@@ -1,134 +1,340 @@
-# retro-go Tab5 —— Tab5 上首个满帧 GBA 模拟器（一台机器 11 个机种）
+# retro-go-tab5
 
-> ### 📟 本分支 `claw4` 是 **Metalio Claw4** 的移植线，不是 M5Stack Tab5
->
-> 本分支把同一棵 retro-go 树移植到 **Metalio Claw4（ESP32-P4 · 720×720 方屏）**；Tab5 的 target 一行未动。
-> 下面的 Tab5 说明只作上游参考 —— Claw4 的方屏几何与 11 键触摸手柄见下图真机实拍。
->
-> ![真机实拍：Metalio Claw4 方屏机身上的 GBA 游戏画面与 11 键触摸手柄 —— 上半屏是 720×480 游戏画面，下半屏左侧十字菱形方向键、中线竖排 SELECT/START/MENU、右侧菱形 R（上）/L（左）/A（右）/B（下），机身右下可见香槟金金属边框](docs/images/claw4-gba-castlevania-device.jpg)
->
-> *Metalio Claw4（ESP32-P4 · 720×720 方屏）· GBA《恶魔城·晓月圆舞曲》3× 整数缩放贴顶（720×480）·
-> GBA 版键位表（11 键：L 占 Y 位、R 占 X 位，方屏不做 X/Y↔L/R 调换钮）· v0.4.9（`claw4` 分支）构建 ·
-> 2026-10-12 真机拍摄；当前版本界面与此图一致。*
->
-> This `claw4` branch is the port to the **Metalio Claw4** (ESP32-P4, 720×720 square panel) — **not** the
-> M5Stack Tab5, whose target is untouched. The Tab5 text below is upstream reference only; the Claw4
-> square-screen geometry and 11-key touch pad are shown in the photo below.
->
-> *Photo: Metalio Claw4 held in hand — GBA screen (integer 3x, 720×480, pinned to the top) plus the 11-key
-> touch pad in the 240 px band below (D-pad diamond left, SELECT/START/MENU stacked on the centre line,
-> R/L/A/B diamond right); build v0.4.9 (`claw4` branch), shot 2026-10-12. The UI is unchanged in the
-> current build.*
+**English** · [中文](README_CN.md)
 
-M5Stack Tab5（ESP32-P4，1280x720 原生竖屏）上的复古游戏机固件：**GBA 满帧 60FPS**（RISC-V 动态重编译），
-并把 retro-core 的其余 10 个机种一起装进同一个固件 —— GB / GBC / NES / SNES / SMS / Game Gear /
-ColecoVision / PC Engine / Lynx / Game & Watch，共 11 个机种。
+**The first full-speed GBA emulator for the M5Stack Tab5 (ESP32-P4) — GBA at a solid 60 FPS with a RISC-V dynamic recompiler, plus the other 10 retro-go systems in the same firmware: GB · GBC · NES · SNES · SMS · Game Gear · ColecoVision · PC Engine · Lynx · Game & Watch.**
+**Tab5 上首个满帧 GBA 模拟器（ESP32-P4）—— RISC-V 动态重编译，稳稳跑满 60 FPS；同一个固件里还装着 retro-go 的其余 10 个机种：GB · GBC · NES · SNES · SMS · Game Gear · ColecoVision · PC Engine · Lynx · Game & Watch。**
 
-**v0.4.9 起支持横竖屏切换**：一份镜像同时支持两个方向，首次开机会询问用哪个，之后能在设置里随时改
-（选择会保存，改完自动重启生效）。界面为触摸屏重做：游戏画面（720x480 = GBA 240x160 的 3 倍整数缩放）
-占满可见区，虚拟手柄画在四周留白处 —— 竖屏时贴顶、手柄在下；横屏时画面居中、手柄在左右两侧。
-存档写在卡里、关机重启后还在。
+The Tab5 is a 1280x720 MIPI-DSI handheld built on the ESP32-P4 — a dual-core RISC-V SoC with 32 MB of PSRAM and no wireless radio at all.
+retro-go is a lightweight multi-system emulator frontend. This repository is the port: board bring-up, display path, audio, input,
+and a GBA core that JIT-compiles ARM/Thumb into native RISC-V so the CPU-emulation cost stops being the bottleneck.
 
-**v0.4.10 — 输入响应提速（本版唯一改动）**：把输入任务的优先级提到显示任务之上，削掉"触摸读被逐像素
-推屏抢占"的长尾。手指按住屏幕时：单次触摸读 **17.2ms → 8.2ms**（最差从 30ms → 8.4ms，抖动几乎清零）、
-采样周期 **29.3ms → 17.8ms**，也就是**按下到核心读到的确认延迟约 58ms → 35ms**。实机上手感明显更跟手。
-显示吞吐与帧率无损失（同条件实测 50.4 vs 51.9ms/s）。仅 Tab5 target 变更，Claw4 一行未动。
+Built and tested on real hardware. Contributions very welcome — see [Contributing](#contributing).
 
-![屏幕内容：横屏模式下的 GBA 游戏画面与虚拟手柄——顶部一排是 L、X/Y ↔ L/R 调换键、R，左侧十字键，右侧 A/B/X/Y 菱形，底部 SELECT / START / MENU，左下角绿色电量圆灯](docs/images/tab5-landscape-game.jpg)
+## Two targets from one tree ｜ 一棵树两个 target
 
-*横屏模式、v0.4.9 构建（2026-10-10 真机拍摄）；当前版本界面与此图一致。*
+This repository builds **two ESP32-P4 handhelds from one source tree**; each build picks one board with
+`--target`. The platform layer (display, audio, input, storage) and all 11 emulator cores are shared code.
 
-The first full-speed GBA emulator for the **M5Stack Tab5** (ESP32-P4, 1280x720 native portrait):
-GBA at a solid **60 FPS** with a RISC-V dynamic recompiler, plus the 10 other retro-go systems in the
-same firmware — GB / GBC / NES / SNES / SMS / Game Gear / ColecoVision / PC Engine / Lynx / Game & Watch.
+| Target | Device | Panel | Touch pad | Build |
+|---|---|---|---|---|
+| `tab5` | M5Stack Tab5 | 1280×720 MIPI-DSI, native portrait, runtime portrait/landscape (v0.4.9+) | 13-key pad drawn in the letterbox margins, incl. the X/Y ↔ L/R swap key | `RG_TAB5_ORIENTATION=0 python3 rg_tool.py --target tab5 --no-networking --single-app build-img launcher gbsp` |
+| `claw4` | Metalio Claw4 | 720×720 square, single orientation | 11-key pad in the 240 px band below the 720×480 game area (13-key SNES layout) | `python3 rg_tool.py --target claw4 --no-networking build-img launcher gbsp` |
 
-**Since v0.4.9 the UI runs in either orientation**: one image supports both, the first boot asks which
-one you want, and you can change it later in the settings (the choice is saved and the device reboots
-into it). The UI is built for a touchscreen: the game screen (720x480, integer 3x of the GBA's 240x160)
-fills the visible area and the virtual gamepad is drawn in the margins around it — pinned to the top
-with the pad below in portrait, centred with the pad on both sides in landscape. ROMs live on the SD
-card (`.zip` works directly, halving card usage) and saves persist across reboots.
+![GBA running on a real Metalio Claw4, held in hand: the 720x480 game screen on top and the 11-key touch pad in the band below](docs/images/claw4-gba-castlevania-device.jpg)
 
-**v0.4.10 — input response speedup (the only change in this release)**: the input task now runs above the
-display task, which removes the tail latency of the touch read being preempted by per-pixel pushes. With a
-finger held on the screen: single touch read **17.2ms → 8.2ms** (worst case 30ms → 8.4ms, jitter almost
-gone) and the sampling period **29.3ms → 17.8ms** — i.e. the press-to-core confirmation latency goes from
-~58ms to ~35ms. Noticeably more responsive in hand. Display throughput and frame rate are unchanged
-(50.4 vs 51.9ms/s under the same load). Tab5 target only; Claw4 is untouched.
+*Metalio Claw4 (ESP32-P4, 720×720 square panel): GBA at 3× integer scale pinned to the top (720×480), with
+the 11-key touch pad in the 240 px band below — D-pad diamond on the left, SELECT/START/MENU stacked on the
+centre line, R/L/A/B diamond on the right. Shot on real hardware, 2026-10-12.*
+*Metalio Claw4（ESP32-P4 · 720×720 方屏）：GBA 3× 整数缩放贴顶（720×480），下方 240px 带内是 11 键触摸手柄 ——
+左侧十字菱形、中线竖排 SELECT/START/MENU、右侧菱形 R/L/A/B。2026-10-12 真机拍摄。*
+
+Claw4 specifics: square panel ⇒ a single orientation (no orientation prompt or setting), no wireless radio,
+a settings menu trimmed to what the hardware can do (no clock / time zone / CRC-cache entries), Chinese UI
+by default, and audio/backlight/battery wired to that board's own parts.
+Claw4 说明：方屏 ⇒ 只有一个方向（无方向弹窗与设置项）；无无线；设置菜单按硬件能力精简（无时钟/时区/封面缓存等项）；
+界面默认中文；音频/背光/电量接的是该板自己的器件。
+
+## Download & install — pick the right file
+
+Since v0.4.9 there is **only one build**: the single-app form — the menu and all 11 emulator cores compile
+into one app. Pick one file per channel, and **there is no wrong build to install any more** (that was a
+problem of the old two-app packaging).
+
+| Where you install from | File | Why |
+|---|---|---|
+| **M5Burner** (recommended) or esptool | `retro-go-tab5-<version>-merged.bin` | Full image (bootloader@0x2000 + partition table@0x8000 + launcher@0x10000), written from 0x0 |
+| **[M5Launcher](https://github.com/bmorcelli/Launcher)** | `retro-go-tab5-<version>-launcher-singleapp.bin` | That platform can only install a **single app image**; this is the app-only image of the very same build (menu + every core) |
+
+**This release is the single-app form**: the in-menu `Check for updates` is gone (it needs a second app
+partition to stage a new firmware) — same trade-off as v0.4.7. Upgrade with a full M5Burner / esptool
+write of the merged image.
+
+**Upgrading from 0.4.8: flash the whole merged image.** The partition table changed in 0.4.9 (three app slots
+→ one 1984K slot); a full M5Burner / esptool write updates the table as well. Do not flash the app partition
+alone — the old 960K slot does not fit.
+
+Both files are attached to each [release](../../releases).
+
+### If you see "SD Card Error / Storage mount failed"
+
+**Reseat the microSD card**, then do a **full power cycle** (power off and on — a reset button is not enough).
+That is the only way to recover a card that has entered an unresponsive state; the firmware retries
+automatically but cannot revive a card that is already wedged. The same applies if it started after
+using a third-party launcher (e.g. M5Launcher).
+
+## Screenshots
+
+**Landscape on real hardware (v0.4.9)** — game centred, D-pad on the left, A/B/X/Y on the right, L / R in the
+top corners, and the **X/Y ↔ L/R swap key centred between L and R**:
+
+![GBA running on a real Tab5 in landscape: game centred, D-pad left, A/B/X/Y right, X/Y swap key between L and R](docs/images/tab5-landscape-game.jpg)
+
+*Landscape mode, v0.4.9 build, photographed on real hardware on 2026-10-10 (M5Stack Tab5 / ESP32-P4 /
+native 720x1280 panel). Every label and position in this shot comes from the firmware's own landscape layout
+table (`retro-go-p4/components/retro-go/targets/tab5/touch_layout.h`) — it is not an illustration.*
+*横屏模式、v0.4.9 构建，2026-10-10 真机拍摄；图中按键名称与位置均出自固件自己的横屏布局表，不是示意画。*
+
+**Portrait layout (v0.4.1)** — this image is rendered from the firmware's own drawing rules (same touch
+layout table, same key colours, same bitmap font), so it is exactly what the device draws:
+
+![retro-go Tab5 in portrait: the game screen on top, the touch gamepad in the control area below it](docs/screenshot-portrait.png)
+
+*The 720x480 game screen is anchored to the top of the native portrait 720x1280 panel; the touch gamepad
+lives in the control area underneath and never overlaps the game. The round light in the middle of the
+control area is the battery indicator (green ≥60% / amber 20-60% / red 10-20% / blinks below 10%, breathes while charging).*
+*游戏画面固定在原生竖屏 720x1280 面板的顶部（720x480），触摸手柄在下方的控制区，永不遮挡画面；
+控制区正中那个圆灯是电量指示（绿 ≥60% / 橙 20~60% / 红 10~20% / 低于 10% 与充电时闪烁）。*
+
+Earlier hardware photo — the v0.3 landscape layout, before the portrait rework:
+
+![GBA running on a real Tab5, with the coloured touch gamepad in the letterbox margins](docs/screenshot-fire-emblem.png)
+
+*Fire Emblem: The Blazing Blade on a real Tab5 (v0.3): the game stays in the middle and the gamepad is
+drawn in the letterbox margins.*
+*《火焰之纹章：烈火之剑》真机照片（v0.3 横屏布局）：画面居中，手柄画在留白区。*
 
 ---
 
-## 下载与安装 / Download & install
+## Status
 
-v0.4.10 是**一份构建**，两个渠道各取一个文件即可（不再有"装错的那份只有菜单、进不了游戏"的问题 ——
-那来自旧的双 app 形态；现在启动器与全部模拟器核都在同一个 app 里）：
+Honest status, measured on the device (not aspirational):
 
-| 安装渠道 | 用哪个文件 | 说明 |
+| Component | State | Notes |
 |---|---|---|
-| **M5Burner**（推荐）或 esptool | `retro-go-tab5-0.4.10-merged.bin` | 完整镜像（bootloader@0x2000 + 分区表@0x8000 + app@0x10000），从 0x0 整片写入 |
-| **[M5Launcher](https://github.com/bmorcelli/Launcher)** | `retro-go-tab5-0.4.10-launcher-singleapp.bin` | 该平台只能装单个 app 镜像；这份就是同一个 app 的纯 app 镜像 |
+| Launcher (ROM browser, menus) | ✅ Working | Touch-driven, 1:1 rendering (no scaling artifacts). First-run guide card on the GBA page (bilingual: A opens the list, where ROMs go) |
+| GBA core (gpSP) | ✅ Working | Interpreter + **RISC-V dynarec** (JIT), ~2x faster than the interpreter |
+| **Cores — 11 consoles** | ✅ Working | GBA, GB, GBC, NES, SNES, SMS, Game Gear, ColecoVision, PC Engine, Lynx, Game & Watch — each with its own window size and integer zoom |
+| **Touch skins** | ✅ Working | Four switchable control-panel palettes (NVS `TouchSkin`). Only the control area is themed — the game screen and its letterbox bars are never touched |
+| **Per-console controls** | ✅ Working | Decided by **what the real controller has** (not by what the upstream core mapped). SNES gets real X/Y/L/R via a new default "Full" preset; GB/GBC/NES/SMS/GG get X/Y as turbo; ColecoVision gets neither |
+| Audio | ✅ Working | ES8388 codec over I2S, 32 kHz, no frame-rate impact |
+| Savestates | ✅ Working | Core-level state written to and restored from the SD card |
+| Touch virtual gamepad | ✅ Working | Portrait layout: the 720x480 game screen is pinned to the top, the gamepad sits in the control area below it (D-pad bottom-left, diamond ABXY bottom-right with per-key colours, L/R in the top corners, SELECT/START/MENU along the bottom). Never overlaps the game |
+| Chinese (CJK) support | ✅ Working | Built-in 3773-glyph CJK font (full GB2312 level-1, OFL-1.1) **compiled into the firmware image** — works no matter how the firmware was installed (a standalone font *partition* gets recreated as a FAT partition by installers like M5Launcher, which would silently lose it and turn Chinese text into boxes); all 197 UI strings localized |
+| Display path | ✅ Working | Block transpose into on-chip SRAM + AXI-QoS priority, and a bounded retry instead of silently dropped frames (v0.3 rework: ~30 fully-rendered frames/sec, no more drift over time) — see [Performance](#performance) |
+| Battery gauge | ✅ Working | INA226 power monitor on the BSP I2C bus (0x41), 2S pack voltage → percentage; shown as the coloured indicator light in the control area (blinks below 10%, breathes while charging) |
+| USB-C charging | ✅ Working | The board's charge-enable (`CHG_EN`) is left **low** by the vendor BSP's IO-expander init (its own comment claims otherwise), so the IP2326 charge IC stays disabled and the pack never charges. The firmware now asserts it explicitly after init, mirroring M5's own demo. Measured on hardware: **-0.75 ~ -0.87 A** into the pack, pack voltage climbing (7627 → 7745 mV) |
+| Other cores in upstream retro-go (MD, MSX, ...) | ❌ Not ported | The 11 consoles above are wired for this target; the remaining retro-go cores are not |
 
-安装包与校验值见 [`dist/`](dist/)（每个版本一个目录，含 `README_M5Burner.md`、双语说明与封面图）。
+**Logical speed is full speed**: GBA titles run at 59-60 fps of emulated time with audio in sync.
+What is *not* yet at 60 is the number of frames the display path actually pushes to the panel (see below).
 
-**Install channel: one build, two files.** M5Burner / esptool take the *merged* image (written from
-0x0, includes the bootloader and partition table); M5Launcher can only install a single app, so it
-takes the *single-app* bin. As of v0.4.9 both come from the same build — the launcher and every
-emulator core live in one app, so there is no longer a wrong build to install.
+---
 
-> ⚠ 从 0.4.8 升级：本版分区表与 0.4.8 多 app 形态不同（原来的三个 app 槽 → 一个 1984K 大槽）。
-> 用 M5Burner / esptool **整包**刷写即可（分区表随之更新）；**不要**只刷 app 分区，旧的 960K 槽装不下。
+## Hardware
 
-## 使用 / Usage
+| | |
+|---|---|
+| Board | M5Stack Tab5 |
+| SoC | ESP32-P4, dual-core RISC-V @ 360 MHz |
+| RAM | 32 MB PSRAM + 736 KB internal SRAM |
+| Flash | 16 MB |
+| Display | 1280x720 MIPI-DSI, ST7123 integrated panel (native portrait 720x1280; the landscape mode is a software rotation) |
+| Touch | ST7123, integrated with the panel, I2C 0x55 |
+| Audio | ES8388 codec (I2S) |
+| Storage | microSD (SDMMC) |
 
-- **ROM**：GBA ROM 放 SD 卡的 `roms/gba/`（`.gba` 或 `.zip`，zip 内放一个 ROM）
-- **存档**：`retro-go/saves/gba/`，游戏内存档跨重启持久化
-- **封面**：可选，`romart/<ROM 文件名>.png`
-- **方向**：首次开机询问（横屏 / 竖屏）；之后在 **Options → Screen orientation** 里改，选择会保存并自动重启生效
-- **操作**：方向键（竖屏左下 / 横屏左侧）· A/B/X/Y 菱形（竖屏右下 / 横屏右侧）·
-  L/R 肩键 · **X/Y ↔ L/R 调换键**（与肩键同排居中，点一下把菱形位与肩键位整对互换，标签随状态变化）·
-  SELECT/START（底部中间）· MENU（游戏内菜单）· 电量圆灯（左下角）
-- **X/Y 键是连发（turbo）键，但只对 GB / GBC / NES 生效** —— 那三台机器没有肩键也没有第 3/4 个动作键，
-  所以 X/Y 被映射成 A/B 连发；GBA 等其余机种上 X/Y 就是独立的 X/Y 按键
-- 界面语言默认英文，可在 **Options → Language** 切换中文（设置保存）
+Note: the ESP32-P4 has **no Wi-Fi and no Bluetooth**. Anything network-related in upstream retro-go is compiled out for this target.
 
-详细说明见 [`dist/`](dist/) 里对应版本的 `README_M5Burner.md`。
+---
 
-## 从源码构建 / Building from source
+## Quick start
 
-```sh
-. tools/idf-env.sh                       # ESP-IDF 5.5.x 环境
+```bash
+# 1. Get ESP-IDF v5.5 and export it (see BUILDING.md for the exact pitfalls)
+. ~/esp/esp-idf-v5.5/export.sh
+
+# 2. Release form — single app (menu + every core in one app; both orientations supported)
 cd retro-go-p4
+python3 rg_tool.py --target tab5 --no-networking --single-app build-img launcher gbsp
+#    one-shot wrapper with the image-shape gates: bash tools/build-tab5-skin.sh single-app
 
-# 发行形态（单 app：启动器 + 全部模拟器核编进同一个 app，支持横竖切换）
-RG_TAB5_ORIENTATION=0 python3 rg_tool.py --target tab5 --no-networking --single-app build-img launcher gbsp
-
-# 旧的双 app 形态（菜单与核心各占一个分区；仍在树内保留，供回归对照）
+# 2b. Legacy two-app form (menu and cores in separate partitions; kept for regression comparison)
 python3 rg_tool.py --target tab5 --no-networking build-img launcher gbsp retro-core
+
+# 3. Flash
+python3 -m esptool --chip esp32p4 -p /dev/cu.usbmodemXXXX -b 921600 \
+  write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
+  0x0 build/tab5-retro-go.img
 ```
 
-产物是 `retro-go_<版本>_tab5-single.img` / `..._tab5.img`（整片合并镜像）；
-纯 app 镜像在同一次构建的 `launcher/build/launcher.bin`。
-刷机脚本见 `tools/flash-tab5.sh`，单 app 镜像自检见 `tools/check-single-app-image.py`，
-免 UI 强制切方向见 `tools/force-orient-nvs.sh`，发布流水线见 `tools/release-tab5.sh`。
+Full details, the `--no-networking` trap, and serial-monitor caveats: **[BUILDING.md](BUILDING.md)**.
 
-> 两种形态由编译期开关 `-DRG_SINGLE_APP=1` 切换。单 app 形态下**屏幕方向是运行时值**：
-> 几何、键位表、切换键坐标都按当前方向取值（见 `components/retro-go/targets/tab5/geom.h`），
-> 方向真值存在 NVS（`rgapp/orient`），由显示层在初始化时读取。
+---
 
-移植文档、触摸手柄布局模板与踩坑记录见 [`docs/`](docs/)。
+## Controls
 
-## 已知事项 / Known issues
+The Tab5 has almost no physical buttons, so the gamepad is drawn on the touch screen — and its position
+**follows the orientation** (the game viewport is 720x480 and is never overlapped).
+**Since v0.4.9 one image supports both orientations**: asked at first boot, changeable later in
+`Settings → Screen orientation` (the choice is stored in NVS and the device reboots into it).
 
-- **横屏的装饰底图仍沿用竖屏风格**（键位与触摸命中区已按横屏重排，属装饰层，后续版本再补）
-- 开机瞬间串口上会有一批 `ST7123`（触摸一体屏）I2C 报错，属既有现象，不影响使用
-- 没有蓝牙手柄时，触摸手柄是唯一输入源（叠加层强制常显）
-- 崩溃时 SD 卡根目录会生成 `crash.log`，反馈问题请带上它
+**Portrait** — game pinned to the top, pad in the control area below:
 
-## 许可与致谢 / License & credits
+```
++----------------------------------+
+|         game screen 720x480      |   <- 3x integer scale, never overlapped
++----------------------------------+
+| [L]                          [R] |
+|                                  |
+|  [D-pad]    (LED)           [X]  |   (LED) = battery light
+|             battery      [Y] [A] |         green/amber/red
+|                            [B]   |
+|                                  |
+|    [SELECT]  [START]  [MENU]     |
++----------------------------------+
+```
 
-- 本项目基于 [ducalex/retro-go](https://github.com/ducalex/retro-go)（GPLv2）移植；
-  GBA 核心为 **[gpSP](https://github.com/libretro/gpsp)**（GPLv2），
-  本移植的 RISC-V 动态重编译（dynarec）派生自 **[HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance)**（GPLv2）
-  —— 因此整体以 **GPLv2** 发布，见各目录下的 `COPYING`
-- 板级支持来自 M5Stack 的 Tab5 BSP（`vendor/m5stack_tab5`）
-- Tab5 竖屏/横屏移植、触摸手柄、性能与安装兼容性工作：andjiang
+**Landscape** — game centred, pad split to the two sides (where the thumbs already are):
+
+```
++----------------------------------------------------------------+
+| [L]                    [ X/Y ]                          [R]    |   <- X/Y centred between L and R
+|                                                                |
+|    [^]                                                         |
+| [<]   [>]       game screen 720x480 (centred)         [X]      |
+|    [v]                                          [Y]       [A]  |
+|                                                                |
+|                  [MENU]          [SELECT]   [START]   (LED)    |
++----------------------------------------------------------------+
+```
+
+- **Orientation** — `Settings → Screen orientation` switches portrait / landscape (asked at first boot;
+  the choice persists in NVS and the device reboots into it)
+- **D-pad** — portrait: control area, bottom-left; landscape: left side of the screen
+- **A / B / X / Y** — control area, bottom-right, diamond layout, each key its own colour
+- **L / R** — top corners of the control area (consoles that have shoulder buttons: **GBA and SNES**)
+- **Swap L/R with X/Y** — GBA only
+- **X / Y** — depends on the console:
+  - **GB / GBC / NES / SMS / Game Gear** — Turbo A / Turbo B (hold to auto-fire)
+  - **SNES** — real X / Y buttons (they are *not* turbo)
+  - **GBA** — real X / Y buttons
+  - **ColecoVision / PC Engine / Lynx / Game & Watch** — not shown (the real hardware has no X/Y)
+- **START / SELECT** — bottom centre
+- **MENU** — open the in-game menu (savestates, options, reset)
+- **Battery light** — centre of the control area: green ≥60% / amber 20-60% / red 10-20% / blinks below 10%, breathes while charging
+- **Language** — Options → Language switches the UI to Chinese (English by default; the choice persists in NVS)
+- **Touch skin** — four switchable control-panel colour palettes (Options). Only the control area is themed; the game screen is never touched
+
+### Controls per console
+
+The layout follows **what the real controller has**, not what the upstream core happened to map:
+
+| Console | Face buttons | Shoulders | Turbo |
+|---|---|---|---|
+| GBA | X / Y / A / B | L / R (+ swap button) | — |
+| SNES | X / Y / A / B | L / R | — |
+| GB / GBC / NES | A / B | — | X / Y |
+| SMS / Game Gear | A / B | — | X / Y |
+| ColecoVision | A / B | — | — |
+| PC Engine / Lynx / Game & Watch | A / B | — | — |
+
+Layout reference: [docs/touch-layout-p2.png](docs/touch-layout-p2.png) (landscape era) ·
+[docs/screenshot-portrait.png](docs/screenshot-portrait.png) (current portrait layout)
+
+---
+
+## Performance
+
+Measured on hardware with the dynarec enabled, Pokémon Emerald:
+
+```
+FPS:61 (46+0+15)     BUSY:32-56%
+ |    |  |  |
+ |    |  |  +-- frames fully drawn
+ |    |  +----- partially drawn
+ |    +-------- skipped
+ +------------- logical fps
+```
+
+- **Logical fps: 59-60** — the emulated console runs at full speed, audio in sync, no pitch drift.
+- **Drawn fps: ~15** — the display path (CPU transpose + PSRAM write-back) is the ceiling, not the CPU emulation
+  (BUSY peaks around 56%, so there is headroom).
+
+The obvious fix — decoupling the emulator from the display with a deeper queue and triple buffering — **was implemented and measured**:
+drawn frames doubled from 15 to 30/sec and the picture got visibly smoother. **It was then reverted**: on this board it periodically
+wedges the display path (screen freezes, no panic log, power cycle required) because the DPI scan-out (~106 MB/s of continuous PSRAM traffic
+at 1280x720@60 Hz) leaves almost no arbitration headroom for a second concurrent writer. That is a property of this panel size, not of the queue design.
+
+**The remaining safe direction is to push *fewer bytes per frame*** — e.g. only submitting the rows the core actually changed.
+See [ROADMAP.md](ROADMAP.md).
+
+---
+
+## Repository layout
+
+```
+retro-go-p4/            the retro-go tree (upstream source + this port)
+  components/retro-go/  framework core: system, display, input, audio, storage, targets/
+    targets/tab5/       board target: config.h, env.py, sdkconfig
+  launcher/             ROM browser app
+  gbsp/                 GBA emulator app (gpSP + RISC-V dynarec)
+  rg_tool.py            upstream build/flash driver
+vendor/                 vendored third-party components required to build
+  m5stack_tab5/         M5Stack Tab5 BSP (vendored copy)
+  esp_lcd_st7121/       panel driver
+tools/                  build / flash / serial-log helper scripts
+docs/                   reference docs, screenshots and the touch layout diagram
+```
+
+### What is upstream and what is this port
+
+`retro-go-p4/` is a full copy of upstream [retro-go](https://github.com/ducalex/retro-go) with local modifications, so the
+directory listing alone will not tell you which files this port touched. That boundary is computed mechanically:
+[docs/UPSTREAM-DIVERGENCE.md](docs/UPSTREAM-DIVERGENCE.md) — of the 841 upstream files, **746 are byte-identical,
+70 were modified by this port, 173 are new and 25 were not carried over**. Read it before editing an upstream file;
+it is also the only list you need to walk when following upstream updates.
+
+> This GitHub repository is the **published mirror** of the maintainer's development tree: `README*`, `CONTRIBUTING*`,
+> `ROADMAP*`, `CHANGELOG*`, `CREDITS.md`, `LICENSE` and `.github/` exist only here; everything else is mirrored wholesale.
+> Before contributing, see "Where your change lives" in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Porting notes
+
+- **[docs/UPSTREAM-DIVERGENCE.md](docs/UPSTREAM-DIVERGENCE.md)** — the mechanically computed boundary between
+  upstream retro-go and this port (which files are byte-identical, modified, new, or dropped), written in Chinese.
+  Read it before editing an upstream file.
+
+## Contributing
+
+This project exists because a device with no upstream support got one anyway. If you have a Tab5, an ESP32-P4 board, or just
+an interest in RISC-V JIT work, there is plenty to do:
+
+- **[ROADMAP.md](ROADMAP.md)** — the concrete open items, roughly ordered
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to build, test, and submit changes
+- **Good first issues**: battery gauge (INA226), push-only-changed-rows display path, porting another core, docs and screenshots
+
+A few house rules that come from doing this on real hardware:
+
+1. **One visible change per flash.** Flash, look at the screen, then continue.
+2. **No serial-console debugging loops.** On this board, opening the USB-CDC port resets the device — so verification is visual
+   (or by reading `/crash.log` off the SD card).
+3. **Anything touching the display path or PSRAM bandwidth must ship behind a runtime switch** (an opt-in file on the SD card),
+   so a bad experiment can be rolled back without reflashing.
+
+---
+
+## Credits
+
+This port stands on other people's work:
+
+- **[retro-go](https://github.com/ducalex/retro-go)** by Alex Duchesne (ducalex) — the emulator frontend this is a port of. GPLv2.
+- **[gpSP](https://github.com/libretro/gpsp)** — the Game Boy Advance core. GPLv2.
+- **[HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance)** — the ESP32-P4 GBA project whose RISC-V dynarec this port's
+  JIT backend is derived from (the derivation chain runs through gpSP, GPLv2). Credit for the dynarec approach belongs there.
+  Two backend defects this port found are reported upstream:
+  [#2 cycle-accounting divergence](https://github.com/Irak4t0n/HowBoyAdvance/issues/2) and
+  [#3 div/rem remainder semantics](https://github.com/Irak4t0n/HowBoyAdvance/issues/3).
+  ⚠️ That repository currently ships **no licence file** (its issue #1 asks about it), so this port only declares
+  *its own* GPLv2 status — it does not label upstream.
+- **M5Stack** — the Tab5 BSP and hardware documentation.
+- **Espressif** — ESP-IDF, and the PPA/DMA2D and MIPI-DSI drivers the display path experiments were built on.
+
+## License
+
+**GPLv2** — see [LICENSE](LICENSE). This is a derivative work of retro-go (GPLv2) and of the HowBoyAdvance dynarec (GPLv2),
+so it must remain GPLv2. If you distribute a firmware image built from this repository, you must make the corresponding source available.
+
+ROMs are **not** included and never will be. Bring your own legally obtained dumps.
