@@ -760,7 +760,7 @@ static bool dpad_was_diag;          /* 上一轮是否斜向（滞回状态） *
 
 static void rg_dpad_geom_update(void)
 {
-    (void)touch_keymap_ensure();
+    touch_keymap_ensure();
     const rg_keymap_touch_t *up = NULL, *down = NULL, *left = NULL, *right = NULL;
     for (size_t i = 0; i < keymap_touch_count; ++i)
     {
@@ -1455,7 +1455,7 @@ void rg_input_init(void)
     /* 只登记"这些虚拟按键存在"，真正的触摸 IC 创建推迟到第一次读手柄时（懒加载）：
      * 此刻 TP_RST 还没释放（扩展器在显示初始化里才初始化），现在创建必然失败。 */
     RG_LOGI("Virtual touch gamepad registered (ST7123 @0x55, lazy init).\n");
-    (void)touch_keymap_ensure();
+    touch_keymap_ensure();
     UPDATE_GLOBAL_MAP(keymap_touch);
 #endif
 #if defined(RG_GAMEPAD_TOUCH_MAP) && defined(ESP_PLATFORM)
@@ -1530,10 +1530,11 @@ uint32_t rg_input_read_gamepad(void)
     /* 每帧入口挂钩：机型表可能变（claw4：GB/GBC 用 AB v2 表；核心 configNs 是 init 之后才写入的）。
      * 单表目标是空宏；Tab5 走 #else 原码（装过即早返回）⇒ 行为与位移都不变。 */
 #ifdef RG_GAMEPAD_TOUCH_MAP_GB
-    if (touch_keymap_ensure())   /* claw4：换了表就同步"设备可产键"掩码（宏定义在本文件后半，故在调用点用） */
-        UPDATE_GLOBAL_MAP(keymap_touch);
-#else
-    touch_keymap_ensure();       /* 上游原码形态（void，装过即早返回） */
+    /* ⚠ 本块整体在 claw4 守卫内：非 claw4 目标在这里**一个字都不加**（上游原码逐字不变）。
+     * 为什么必须挂在每帧入口：核心的 app->configNs 是 rg_system_init 之后才写入的，
+     * 只在 init 调一次会把表锁错（GB 里仍是 GBA 键位，2026-10-16 真机实测）。 */
+    if (touch_keymap_ensure())
+        UPDATE_GLOBAL_MAP(keymap_touch);   /* 换了表就同步"设备可产键"掩码（宏定义在本文件后半，故在调用点用） */
 #endif
 #ifdef RG_TARGET_SDL2
     /* macOS：只有主线程能泵 Cocoa 事件（子线程会触发 NSApplication 异常 → abort） */
