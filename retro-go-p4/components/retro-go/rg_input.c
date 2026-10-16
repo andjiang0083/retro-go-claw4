@@ -74,6 +74,9 @@ static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
 #ifdef RG_GAMEPAD_TOUCH_MAP_ALT
 static const rg_keymap_touch_t keymap_touch_main[] = RG_GAMEPAD_TOUCH_MAP;
 static const rg_keymap_touch_t keymap_touch_alt[]  = RG_GAMEPAD_TOUCH_MAP_ALT;
+#ifdef RG_GAMEPAD_TOUCH_MAP_GB   /* claw4 第三表：GB/GBC（v2 AB）；Tab5 不定义此宏，零影响 */
+static const rg_keymap_touch_t keymap_touch_gb[]   = RG_GAMEPAD_TOUCH_MAP_GB;
+#endif
 static rg_keymap_touch_t keymap_touch[16];      /* 实际使用的那张（容量由下面的断言兜底） */
 static size_t keymap_touch_count;
 _Static_assert(RG_COUNT(keymap_touch_main) <= RG_COUNT(keymap_touch) &&
@@ -103,6 +106,16 @@ static bool rg_claw4_use_gba_layout(void)
     const char *ns = (app && app->configNs) ? app->configNs : "";
     return strcmp(ns, "snes") != 0;
 }
+#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+/* GB/GBC → v2 新 AB 表（9 键，用户 2026-10-17 定稿；SPEC-CLAW4-MULTICORE §3）。
+ * 判据与铭牌同源：configNs == "gb" || "gbc"。 */
+static bool rg_claw4_use_gb_layout(void)
+{
+    rg_app_t *app = rg_system_get_app();
+    const char *ns = (app && app->configNs) ? app->configNs : "";
+    return strcmp(ns, "gb") == 0 || strcmp(ns, "gbc") == 0;
+}
+#endif
 #endif
 
 /* 把该用的那张搬进来（幂等）。搬完再也不改 ⇒ 必须在"核心机型已确定"之后第一次调用。 */
@@ -110,9 +123,16 @@ static void touch_keymap_ensure(void)
 {
     if (keymap_touch_count)
         return;
+#ifdef RG_GAMEPAD_TOUCH_MAP_GB   /* claw4 三分支；Tab5 不定义该宏，走下面原路径零位移 */
+    const bool use_gb  = rg_claw4_use_gb_layout();
+    const bool use_alt = !use_gb && RG_TOUCH_KEYMAP_USE_ALT();
+    const rg_keymap_touch_t *src = use_gb ? keymap_touch_gb : (use_alt ? keymap_touch_alt : keymap_touch_main);
+    keymap_touch_count = use_gb ? RG_COUNT(keymap_touch_gb) : (use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main));
+#else
     const bool use_alt = RG_TOUCH_KEYMAP_USE_ALT();
     const rg_keymap_touch_t *src = use_alt ? keymap_touch_alt : keymap_touch_main;
     keymap_touch_count = use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main);
+#endif
     memcpy(keymap_touch, src, keymap_touch_count * sizeof(rg_keymap_touch_t));
 }
 #else

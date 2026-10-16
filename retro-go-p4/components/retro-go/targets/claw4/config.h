@@ -276,6 +276,8 @@
  *   在接上之前：主表 = SNES 版（键最全，当兜底），备表 = GBA 版。 */
 #define RG_GAMEPAD_TOUCH_MAP     RG_CLAW4_TOUCH_MAP_SNES
 #define RG_GAMEPAD_TOUCH_MAP_ALT RG_CLAW4_TOUCH_MAP_GBA
+/* GB/GBC 第三表（v2 AB，SPEC-CLAW4-MULTICORE §3）：仅 claw4 定义此宏，Tab5 不可见 */
+#define RG_GAMEPAD_TOUCH_MAP_GB  RG_CLAW4_TOUCH_MAP_GB
 /* 两张表**条数不等**（SNES 13 / GBA 11）—— 它们是两种机型布局，不是两个方向；
  * 共享代码里那条"两张表条数必须一致"的静态断言对本机不成立，显式放行。 */
 #define RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS 1
