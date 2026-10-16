@@ -82,12 +82,12 @@ jobs:
           done
 
       # ── 3. claw4 全量构建（launcher + gbsp 双 app merged，与发布脚本同形态）──
-      - name: Build claw4 merged image (launcher + gbsp)
+      - name: Build claw4 merged image (launcher + retro-core + gbsp)
         working-directory: retro-go-p4
         run: |
           set -euo pipefail
           rm -f partitions.csv partitions.bin   # 构建期生成物，强制重建（.gitignore 已忽略）
-          python3 rg_tool.py --target claw4 --no-networking build-img launcher gbsp 2>&1 | tee ../build-claw4.log
+          python3 rg_tool.py --target claw4 --no-networking build-img launcher gbsp retro-core 2>&1 | tee ../build-claw4.log
 
       # ── 4. 三点门禁（判据与 tools/release-claw4.sh:78-98 一致，内联防漂移副本）──
       - name: Structure gate (claw4 flash-size nibble)
@@ -98,23 +98,39 @@ jobs:
           [ -n "$IMG" ] || { echo "::error::没找到 retro-go_*_claw4.img"; ls -la; exit 1; }
           [ -s launcher/build/launcher.bin ] || { echo "::error::launcher.bin 缺失"; exit 1; }
           [ -s gbsp/build/gbsp.bin ] || { echo "::error::gbsp.bin 缺失"; exit 1; }
+          [ -s retro-core/build/retro-core.bin ] || { echo "::error::retro-core.bin 缺失"; exit 1; }
           echo "merged image: $IMG ($(stat -c%s "$IMG") bytes)"
           python3 - "$IMG" <<'PYEOF'
-          import sys, hashlib, re
+          import sys, hashlib, re, csv
           img = sys.argv[1]
           data = open(img,'rb').read()
           def nib(off): return (data[off+3] >> 4) & 0xF
-          nibs = {hex(o): nib(o) for o in (0x2000, 0x10000, 0x100000)}
-          assert len(set(nibs.values())) == 1, f"三段 flash-size nibble 不一致: {nibs}"
+          # 活动 app 槽从**本次生成的 partitions.csv** 取，绝不写死偏移：
+          # 槽序由 rg_tool.py 的 PROJECT_APPS 字典序决定（launcher→retro-core→gbsp），
+          # 形态一变（加核/换形态）写死的偏移就会指错槽 —— 退化成"零断言 PASS"。
+          slots, declared = [], []
+          for row in csv.reader(open("partitions.csv")):
+              if len(row) >= 5 and row[1].strip() == "app" and row[2].strip().startswith("ota_"):
+                  (declared if row[0].strip().endswith("_l") else slots).append(
+                      (row[0].strip(), int(row[3].strip())))
+          assert slots, "partitions.csv 无活动 app 槽（零断言=门禁空转）"
+          assert [s for s, _ in slots] == ["launcher", "retro-core", "gbsp"], \
+              f"活动槽形态不符（期望 launcher/retro-core/gbsp）: {[s for s, _ in slots]}"
+          offs = [0x2000] + [o for _, o in slots]
+          nibs = {hex(o): nib(o) for o in offs}
+          assert len(set(nibs.values())) == 1, f"各段 flash-size nibble 不一致: {nibs}"
+          assert all(o < len(data) for _, o in slots), "活动槽偏移越界（分区表与镜像不一致）"
+          assert all(o >= len(data) for _, o in declared), "声明槽 _l 竟然有数据（镜像被撑大）"
           SC = "components/retro-go/targets/claw4/sdkconfig"   # 唯一真源
           m = re.search(r'CONFIG_ESPTOOLPY_FLASHSIZE="(\d+)MB"', open(SC, encoding='utf-8', errors='replace').read())
           assert m, f"{SC} 未声明 CONFIG_ESPTOOLPY_FLASHSIZE"
           NIB = {"1":0,"2":1,"4":2,"8":3,"16":4,"32":5,"64":6,"128":7}
           exp = NIB[m.group(1)]
-          assert nibs['0x2000'] == exp, f"nibble={nibs['0x2000']}，但 {SC} 声明 {m.group(1)}MB（期望 {exp}）"
+          assert set(nibs.values()) == {exp}, f"nibble={nibs}，但 {SC} 声明 {m.group(1)}MB（期望 {exp}）"
           assert data[0x8000:0x8002] == b'\xaa\x50', "分区表 magic @0x8000 缺失"
           assert len(data) >= 1048576, f"镜像过小 {len(data)} B，不像完整 merged 件"
-          print(f"OK claw4 nibble={exp}({m.group(1)}MB, {SC}) / aa50 / sha256={hashlib.sha256(data).hexdigest()[:12]}")
+          print(f"OK claw4 nibble={exp}({m.group(1)}MB, {SC}) / aa50 / 槽={[s for s,_ in slots]} "
+                f"偏移={[hex(o) for o in offs]} / {len(data)}B / sha256={hashlib.sha256(data).hexdigest()[:12]}")
           PYEOF
           shasum -a 256 "$IMG" | tee ../SHA256SUMS-claw4.txt
 

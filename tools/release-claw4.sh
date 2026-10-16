@@ -25,7 +25,7 @@ DO_COMMIT=0; DO_PUBLISH=0
 for f in "$@"; do case "$f" in --commit) DO_COMMIT=1;; --publish) DO_PUBLISH=1;; *) echo "未知 flag: $f"; exit 1;; esac; done
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-[ "$BRANCH" = "claw4" ] || { echo "⛔ 当前分支是 $BRANCH，本脚本只许在 claw4 上跑（主干零改动纪律）"; exit 1; }
+[ "$BRANCH" = "claw4" ] || { echo "⛔ 当前分支是 ${BRANCH}（本脚本只许在 claw4 上跑，主干零改动纪律）"; exit 1; }
 case "$VER" in v[0-9]*.[0-9]*) :;; *) echo "⛔ 版本号格式应为 vX.Y.Z，收到: $VER"; exit 1;; esac
 VER_BARE="${VER#v}"
 FID="4d45ca7e57e235b067a0753877232d0a"
@@ -56,8 +56,8 @@ if [ "$DO_PUBLISH" != "1" ]; then
   echo "--- dry-run：将会执行 ---"
   [ "$DO_COMMIT" = "1" ] || echo "  0) （工作区若有改动需先 --commit）"
   echo "  1) git tag ${VER}   # claw4 HEAD，主干零位移"
-  echo "  2) IDF v5.5 钉版重编: rg_tool.py --target claw4 --no-networking build-img launcher gbsp"
-  echo "  3) 三点门禁: @0x2000/@0x10000/@0x100000 flash-size nibble 一致且等于 targets/claw4/sdkconfig 声明值(Claw4=32MB⇒5) + @0x8000 aa50 + 分区表对基线"
+  echo "  2) IDF v5.5 钉版重编: rg_tool.py --target claw4 --no-networking build-img launcher gbsp retro-core（3-app 形态）"
+  echo "  3) 门禁: 活动 app 槽从本次 partitions.csv 派生（launcher/retro-core/gbsp）+ @0x2000 bootloader 的 flash-size nibble 全一致且等于 targets/claw4/sdkconfig 声明值(Claw4=32MB⇒5) + @0x8000 aa50"
   echo "  4) cp merged img → releases/claw4/${BIN_NAME} (+ .sha256, cmp 字节一致)"
   echo "  5) git push origin claw4 && git push origin ${VER}   # 只推这两个 ref"
   echo "  6) GitHub Release ${VER}: 上传 ${BIN_NAME} + .sha256（钥匙串 token, API）"
@@ -70,7 +70,7 @@ git tag "$VER"
 export IDF_PATH="$HOME/esp/esp-idf-v5.5"
 export IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf5.5_py3.14_env"
 source "$IDF_PATH/export.sh" >/dev/null 2>&1 || { echo "⛔ IDF export 失败"; exit 1; }
-( cd retro-go-p4 && python3 rg_tool.py --target claw4 --no-networking build-img launcher gbsp ) > ".buildlogs/release-claw4-${VER}.log" 2>&1 \
+( cd retro-go-p4 && python3 rg_tool.py --target claw4 --no-networking build-img launcher gbsp retro-core ) > ".buildlogs/release-claw4-${VER}.log" 2>&1 \
   || { echo "⛔ 构建失败，见 .buildlogs/release-claw4-${VER}.log"; tail -5 ".buildlogs/release-claw4-${VER}.log"; exit 1; }
 IMG="$(ls -t retro-go-p4/*_claw4.img | head -1)"
 echo "  ✓ 构建产物: $IMG"
@@ -81,8 +81,17 @@ import sys, hashlib, os
 img = sys.argv[1]
 data = open(img,'rb').read()
 def nib(off): return (data[off+3] >> 4) & 0xF
-nibs = {hex(o): nib(o) for o in (0x2000, 0x10000, 0x100000)}
-assert len(set(nibs.values())) == 1, f"三段 flash-size nibble 不一致: {nibs}"
+import csv
+slots = []
+for row in csv.reader(open("retro-go-p4/partitions.csv")):
+    if len(row) >= 5 and row[1].strip() == "app" and row[2].strip().startswith("ota_") and not row[0].strip().endswith("_l"):
+        slots.append((row[0].strip(), int(row[3].strip())))
+assert slots, "partitions.csv 无活动 app 槽（零断言=门禁空转）"
+assert [s for s, _ in slots] == ["launcher", "retro-core", "gbsp"], f"活动槽形态不符: {[s for s,_ in slots]}"
+offs = [0x2000] + [o for _, o in slots]
+nibs = {hex(o): nib(o) for o in offs}
+assert len(set(nibs.values())) == 1, f"各段 flash-size nibble 不一致: {nibs}"
+assert all(o < len(data) for _, o in slots), "活动槽偏移越界"
 # 期望值来自唯一真源：targets/claw4/sdkconfig（Claw4 = 32MB ⇒ nibble=5）。
 # 切勿硬编码 nibble：写死过 4(16MB) 曾把正确的 32MB 镜像判成不合格。
 import re
@@ -92,10 +101,10 @@ m = re.search(r'CONFIG_ESPTOOLPY_FLASHSIZE="(\d+)MB"', sc)
 assert m, f"{SC} 未声明 CONFIG_ESPTOOLPY_FLASHSIZE"
 NIB = {"1":0,"2":1,"4":2,"8":3,"16":4,"32":5,"64":6,"128":7}
 exp = NIB[m.group(1)]
-assert nibs['0x2000'] == exp, f"flash-size nibble={nibs['0x2000']}，但 {SC} 声明 {m.group(1)}MB（期望 nibble={exp}）"
+assert set(nibs.values()) == {exp}, f"flash-size nibble={nibs}，但 {SC} 声明 {m.group(1)}MB（期望 nibble={exp}）"
 assert data[0x8000:0x8002] == b'\xaa\x50', "分区表 magic @0x8000 缺失"
 pt = data[0x8000:0xc000]
-print(f"  ✓ 三点门禁 nibble={exp}({m.group(1)}MB, 源自 {SC}) / aa50 / 分区表 sha256={hashlib.sha256(pt).hexdigest()[:12]}")
+print(f"  ✓ 门禁 nibble={exp}({m.group(1)}MB, 源自 {SC}) / aa50 / 槽={[s for s,_ in slots]} 偏移={[hex(o) for o in offs]} / 分区表 sha256={hashlib.sha256(pt).hexdigest()[:12]}")
 PYEOF
 
 # ── ⑤ 打包（产物不入库；.gitignore 已覆盖 releases/）─────────────────────
