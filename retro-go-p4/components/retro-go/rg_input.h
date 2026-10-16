@@ -96,6 +96,10 @@ typedef struct
 // 显示层要用它把虚拟按键画到屏幕上（否则按键是"盲区"，用户不知道点哪里）
 #if defined(RG_GAMEPAD_TOUCH_MAP)
 const rg_keymap_touch_t *rg_input_get_touch_keymap(size_t *count);
+#if defined(RG_TARGET_CLAW4)
+/* claw4：键位表代际号（换表 +1）。可视层用它决定"重建画出来的按键"。 */
+uint32_t rg_input_touch_keymap_gen(void);
+#endif
 #endif
 
 // 当前按下的键（含触摸虚拟键）——可视层的"按下高亮"用

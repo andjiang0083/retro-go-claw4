@@ -128,6 +128,12 @@ static bool rg_claw4_use_gb_layout(void)
  * ⚠ 共享文件铁律：三分支全在 RG_GAMEPAD_TOUCH_MAP_GB 守卫内；#else（Tab5）保留**上游原码**
  *   逐字不变 ⇒ 他机零位移。 */
 #ifdef RG_GAMEPAD_TOUCH_MAP_GB
+/* 键位表**代际号**：每换一次表 +1。可视层（rg_touch_overlay.c）靠它判断
+ * "画出来的按键要不要重建"——它那套按键精灵只在 init 建一次，而这里是每帧重算，
+ * 两者错开的症状就是**画的是旧表、点的是新表**（2026-10-16 真机：GBC 里 A/B 还在老位置）。 */
+static uint32_t s_touch_keymap_gen;
+uint32_t rg_input_touch_keymap_gen(void) { return s_touch_keymap_gen; }
+
 /* claw4 专用：三分支（主表 SNES / 备表 GBA / GB-GBC 专用）+ 每帧重算。
  * 返回"这次是否真的换了表"，调用点据此同步"设备可产键"掩码。 */
 static bool touch_keymap_ensure(void)
@@ -143,6 +149,7 @@ static bool touch_keymap_ensure(void)
     memcpy(keymap_touch, src, cnt * sizeof(rg_keymap_touch_t));
     keymap_touch_count = cnt;
     installed = want;
+    s_touch_keymap_gen++;   /* 通知可视层：精灵与命中已不同代，必须重建 */
     const rg_app_t *app = rg_system_get_app();
     RG_LOGI("重选表 ⇒ %s (ns=%s, %u 键)\n",
             use_gb ? "GB/GBC 版 AB v2 对角" : (use_alt ? "GBA/AB 机版" : "SNES 版"),
