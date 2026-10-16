@@ -1,10 +1,9 @@
 # R1 隔离门禁的棘轮上限：共享层允许残留的违例（只许减少，新增即红）
 # 格式：相对路径|类型(cond/sym)|上限|理由
 # 每清一处就把上限下调（--update）；想上调必须显式 --force（= 承认架构倒退）
-config.h|cond|2|屏幕驱动代号的分发表（RG_SCREEN_DRIVER 选哪份驱动头）—— 属构建期选择，保留
-rg_audio.c|sym|9|音频**能力宏**模式（claw4_bt / tab5_es8388 挂在 sink 表上）—— 形状已对，P4 只统一命名
-rg_display.c|sym|1|注释里提到板驱动文件名（P2-B 顺手清）
-rg_input.c|cond|10|claw4 三分支键位表选表 + 每帧重算 + 触摸脚本钩子 —— P3 迁出到 targets/claw4/
-rg_input.c|sym|2|rg_claw4_use_gba_layout() 调用点 —— P3 随条件块一起迁出
-rg_input.h|cond|1|claw4 键位代际号（可视层重建精灵用）对外声明 —— P3 迁出
-rg_touch_overlay.c|cond|6|claw4 键位代际号触发的精灵重建 —— P3 迁出
+config.h|cond|2|
+rg_audio.c|sym|9|
+rg_display.c|sym|1|
+rg_input.c|cond|5|
+rg_input.c|sym|2|
+rg_touch_overlay.c|cond|6|

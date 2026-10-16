@@ -279,6 +279,13 @@
 #define RG_GAMEPAD_TOUCH_MAP_ALT RG_CLAW4_TOUCH_MAP_GBA
 /* GB/GBC 第三表（v2 AB，SPEC-CLAW4-MULTICORE §3）：仅 claw4 定义此宏，Tab5 不可见 */
 #define RG_GAMEPAD_TOUCH_MAP_GB  RG_CLAW4_TOUCH_MAP_GB
+/* ── 板级能力开关（共享层只认这两个名字，不认板名 —— 见 tools/check-board-isolation.py）──
+ * RG_TOUCH_KEYMAP_TABLE_EXTRA：可选的第三张键位表（共享文件在 keymap_touch[] 之前声明它）；
+ * RG_TOUCH_KEYMAP_BOARD_HOOK ：板级选表实现（共享文件 include 它，同一个 TU、可内联）。
+ * 迁出原因：这三张表的选表判据 100% 是 claw4 的事，写在共享文件里会让 Tab5 每次都要
+ * 跟着做"零位移证明"。实现见 targets/claw4/touch_keymap.h。 */
+#define RG_TOUCH_KEYMAP_TABLE_EXTRA  RG_GAMEPAD_TOUCH_MAP_GB
+#define RG_TOUCH_KEYMAP_BOARD_HOOK   "targets/claw4/touch_keymap.h"
 /* 两张表**条数不等**（SNES 13 / GBA 11）—— 它们是两种机型布局，不是两个方向；
  * 共享代码里那条"两张表条数必须一致"的静态断言对本机不成立，显式放行。 */
 #define RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS 1

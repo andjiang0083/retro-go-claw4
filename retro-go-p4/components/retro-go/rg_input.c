@@ -74,8 +74,8 @@ static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
 #ifdef RG_GAMEPAD_TOUCH_MAP_ALT
 static const rg_keymap_touch_t keymap_touch_main[] = RG_GAMEPAD_TOUCH_MAP;
 static const rg_keymap_touch_t keymap_touch_alt[]  = RG_GAMEPAD_TOUCH_MAP_ALT;
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB   /* claw4 第三表：GB/GBC（v2 AB）；Tab5 不定义此宏，零影响 */
-static const rg_keymap_touch_t keymap_touch_gb[]   = RG_GAMEPAD_TOUCH_MAP_GB;
+#ifdef RG_TOUCH_KEYMAP_TABLE_EXTRA   /* 可选第三张表（板级提供；**位置必须在 keymap_touch[] 之前**，保持原有数据布局） */
+static const rg_keymap_touch_t keymap_touch_gb[] = RG_TOUCH_KEYMAP_TABLE_EXTRA;
 #endif
 static rg_keymap_touch_t keymap_touch[16];      /* 实际使用的那张（容量由下面的断言兜底） */
 static size_t keymap_touch_count;
@@ -95,68 +95,12 @@ _Static_assert(RG_COUNT(keymap_touch_main) == RG_COUNT(keymap_touch_alt),
 #define RG_TOUCH_KEYMAP_USE_ALT() (rg_orient_active() == RG_ORIENT_LANDSCAPE)
 #endif
 
-/* claw4：主表 = SNES 版（13 键）、备表 = GBA 版（11 键）。
- * 判据 = 当前核心机型 id（app->configNs，与叠加层铭牌/配色同源）：有 X/Y 的机型（snes）
- * 用主表；其余（gba/gb/gbc/nes…）用备表 —— 它们都没有 X/Y，L/R 落在菱形位上才顺手
- * （用户 2026-10-11 定稿：GBA 版 L 占 Y 位、R 占 X 位）。 */
-#if defined(RG_TARGET_CLAW4)
-static bool rg_claw4_use_gba_layout(void)
-{
-    rg_app_t *app = rg_system_get_app();
-    const char *ns = (app && app->configNs) ? app->configNs : "";
-    return strcmp(ns, "snes") != 0;
-}
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-/* GB/GBC → v2 新 AB 表（9 键，用户 2026-10-17 定稿；SPEC-CLAW4-MULTICORE §3）。
- * 判据与铭牌同源：configNs == "gb" || "gbc"。 */
-static bool rg_claw4_use_gb_layout(void)
-{
-    rg_app_t *app = rg_system_get_app();
-    const char *ns = (app && app->configNs) ? app->configNs : "";
-    return strcmp(ns, "gb") == 0 || strcmp(ns, "gbc") == 0;
-}
-#endif
-#endif
-
-/* 选表 = **每次重算 + 变了就地换**（2026-10-16 真机实测修：GB 里仍是老键位）。
- * 为什么不能"装过就锁死"：本函数首次调用发生在 rg_input_init()（"Virtual touch gamepad
- * registered" 那段），那一刻核心的 app->configNs **还没设成 "gb"**（核心是 rg_system_init
- * 之后才赋值）⇒ 锁死 = 把 GBA 表永久带进 GB/GBC 游戏（用户反馈"GB 还是老的键位"）。
- * 正确姿势：每帧重算该用哪张，与已装那张比，变了就地 memcpy 换表；命中判定与可视层都每帧
- * 经 rg_input_get_touch_keymap() 取数 ⇒ 运行中换表安全。
- * 十字键几何在三张表里逐字节相同（中心 160,600 / 臂距 72）⇒ 换表无需重算 dpad_geom。
- * ⚠ 共享文件铁律：三分支全在 RG_GAMEPAD_TOUCH_MAP_GB 守卫内；#else（Tab5）保留**上游原码**
- *   逐字不变 ⇒ 他机零位移。 */
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-/* 键位表**代际号**：每换一次表 +1。可视层（rg_touch_overlay.c）靠它判断
- * "画出来的按键要不要重建"——它那套按键精灵只在 init 建一次，而这里是每帧重算，
- * 两者错开的症状就是**画的是旧表、点的是新表**（2026-10-16 真机：GBC 里 A/B 还在老位置）。 */
-static uint32_t s_touch_keymap_gen;
-uint32_t rg_input_touch_keymap_gen(void) { return s_touch_keymap_gen; }
-
-/* claw4 专用：三分支（主表 SNES / 备表 GBA / GB-GBC 专用）+ 每帧重算。
- * 返回"这次是否真的换了表"，调用点据此同步"设备可产键"掩码。 */
-static bool touch_keymap_ensure(void)
-{
-    static int installed = -1;   /* -1=未装 0=主表 1=备表 2=GB/GBC */
-    const bool use_gb  = rg_claw4_use_gb_layout();
-    const bool use_alt = !use_gb && RG_TOUCH_KEYMAP_USE_ALT();
-    const int want = use_gb ? 2 : (use_alt ? 1 : 0);
-    if (want == installed)
-        return false;
-    const rg_keymap_touch_t *src = use_gb ? keymap_touch_gb : (use_alt ? keymap_touch_alt : keymap_touch_main);
-    const size_t cnt = use_gb ? RG_COUNT(keymap_touch_gb) : (use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main));
-    memcpy(keymap_touch, src, cnt * sizeof(rg_keymap_touch_t));
-    keymap_touch_count = cnt;
-    installed = want;
-    s_touch_keymap_gen++;   /* 通知可视层：精灵与命中已不同代，必须重建 */
-    const rg_app_t *app = rg_system_get_app();
-    RG_LOGI("重选表 ⇒ %s (ns=%s, %u 键)\n",
-            use_gb ? "GB/GBC 版 AB v2 对角" : (use_alt ? "GBA/AB 机版" : "SNES 版"),
-            (app && app->configNs) ? app->configNs : "", (unsigned)cnt);
-    return true;
-}
-#else   /* 上游原码逐字不变（Tab5 等：装过即早返回，路径与位移零变化） */
+/* 板级选表实现（板名与机型判据都留在板级文件里）。
+ * 默认不定义 ⇒ 走下面的"上游原码"路径（Tab5 等：装过即早返回，路径与位移零变化）；
+ * claw4 在 targets/claw4/config.h 里定义成 "targets/claw4/touch_keymap.h"。 */
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK
+#include RG_TOUCH_KEYMAP_BOARD_HOOK
+#else
 static void touch_keymap_ensure(void)
 {
     if (keymap_touch_count)
@@ -1536,8 +1480,8 @@ uint32_t rg_input_read_gamepad(void)
 {
     /* 每帧入口挂钩：机型表可能变（claw4：GB/GBC 用 AB v2 表；核心 configNs 是 init 之后才写入的）。
      * 单表目标是空宏；Tab5 走 #else 原码（装过即早返回）⇒ 行为与位移都不变。 */
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-    /* ⚠ 本块整体在 claw4 守卫内：非 claw4 目标在这里**一个字都不加**（上游原码逐字不变）。
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK
+    /* ⚠ 本块整体在"板级 hook"守卫内：非 claw4 目标在这里**一个字都不加**（上游原码逐字不变）。
      * 为什么必须挂在每帧入口：核心的 app->configNs 是 rg_system_init 之后才写入的，
      * 只在 init 调一次会把表锁错（GB 里仍是 GBA 键位，2026-10-16 真机实测）。 */
     if (touch_keymap_ensure())
