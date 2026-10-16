@@ -119,7 +119,13 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 0   /* ⚠ 2026-10-16 A/B 第1轮：单 app 形态"打开 GB/GBC 即崩"的
+#define CLAW4_PPA_CONVERT 1   /* ⚠ 2026-10-16 A/B 第2轮：3-app 形态下把 PPA 开回来（本轮只动这一个变量）。
+                                       * 为什么要开：PPA 关 = 转置走 CPU，真机游戏内 xpose=229~465ms/s、
+                                       * display 占每秒 285~562ms ⇒ GBA 卡（用户反馈"帧率不足/卡"）。
+                                       * 第1轮（单 app 形态）关掉只因当时 PPA 开得更早崩，而 PPA 已被证明不是根因、
+                                       * 且单 app 形态已弃用 ⇒ 基线必须回到发布件 v0.4.13 的设置（开）。
+                                       * 判据：① GBA 手感恢复且 xpose 回落到个位 ms/s；② 开/退游戏、读存档、
+                                       * 音量调节 30 分钟内不崩（崩则回到 0 并记为形态相关缺陷）。原第1轮记录：
                                        * 崩溃链解到 tlsf align_up assert（堆元数据被写坏，victim=
                                        * crc_cache_save→esp_vfs_open→heap_caps_malloc）。同一份日志里
                                        * 紧跟着 PPA 自检出现 ops=24 err=12 的 "exceed maximum pending
