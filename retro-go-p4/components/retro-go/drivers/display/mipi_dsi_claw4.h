@@ -119,7 +119,15 @@
  *         叠加层合成（~30ms/块）；PPA 本体按块 0.41ms vs CPU 转置 1.06ms（快 2.6×）。
  *   失败/未注册 ⇒ 自动退回 CPU 展开（下面用 claw4_ppa != NULL 判）。 */
 #ifndef CLAW4_PPA_CONVERT
-#define CLAW4_PPA_CONVERT 1   /* ✓ 2026-10-15 复核后维持开启（真机取证，数据内联如下）：
+#define CLAW4_PPA_CONVERT 0   /* ⚠ 2026-10-16 A/B 第1轮：单 app 形态"打开 GB/GBC 即崩"的
+                                       * 崩溃链解到 tlsf align_up assert（堆元数据被写坏，victim=
+                                       * crc_cache_save→esp_vfs_open→heap_caps_malloc）。同一份日志里
+                                       * 紧跟着 PPA 自检出现 ops=24 err=12 的 "exceed maximum pending
+                                       * transactions" 风暴 ⇒ 首要嫌疑=PPA 异步在途×缓冲复用。
+                                       * 本轮只动这一个变量（0=CPU 转置，= 用户验收过的 v0.4.11 行为）。
+                                       * 判据：能进 GB/GBC 且 240s 无 panic ⇒ 定罪 PPA；仍崩 ⇒ 下一轮
+                                       * 走堆投毒/追踪哨兵（references/crash-forensics.md §6）。
+                                       * 原定案（PPA 更快：xpose 4ms vs 53ms；FPS 106 vs 50）留档于下（历史记录）：
                                        *  · v0.4.13 / MAC 30:ed:a0:e1:8c:5a，四组合颜色自检原始日志：
                                        *      rs=0 bs=0 maxdiff=248 | rs=1 bs=0 maxdiff=247
                                        *      rs=0 bs=1 maxdiff=  7 ✅唯一达标 | rs=1 bs=1 maxdiff=247
@@ -711,6 +719,7 @@ static void claw4_test_boot_task(void *arg)
     vTaskDelete(NULL);
 }
 #endif
+
 
 
 
