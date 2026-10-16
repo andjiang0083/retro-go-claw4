@@ -127,15 +127,17 @@ static bool rg_claw4_use_gb_layout(void)
  * 十字键几何在三张表里逐字节相同（中心 160,600 / 臂距 72）⇒ 换表无需重算 dpad_geom。
  * ⚠ 共享文件铁律：三分支全在 RG_GAMEPAD_TOUCH_MAP_GB 守卫内；#else（Tab5）保留**上游原码**
  *   逐字不变 ⇒ 他机零位移。 */
-static void touch_keymap_ensure(void)
+#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+/* claw4 专用：三分支（主表 SNES / 备表 GBA / GB-GBC 专用）+ 每帧重算。
+ * 返回"这次是否真的换了表"，调用点据此同步"设备可产键"掩码。 */
+static bool touch_keymap_ensure(void)
 {
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB   /* claw4：三分支（主表 SNES / 备表 GBA / GB-GBC 专用） */
     static int installed = -1;   /* -1=未装 0=主表 1=备表 2=GB/GBC */
     const bool use_gb  = rg_claw4_use_gb_layout();
     const bool use_alt = !use_gb && RG_TOUCH_KEYMAP_USE_ALT();
     const int want = use_gb ? 2 : (use_alt ? 1 : 0);
     if (want == installed)
-        return;
+        return false;
     const rg_keymap_touch_t *src = use_gb ? keymap_touch_gb : (use_alt ? keymap_touch_alt : keymap_touch_main);
     const size_t cnt = use_gb ? RG_COUNT(keymap_touch_gb) : (use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main));
     memcpy(keymap_touch, src, cnt * sizeof(rg_keymap_touch_t));
@@ -145,22 +147,23 @@ static void touch_keymap_ensure(void)
     RG_LOGI("重选表 ⇒ %s (ns=%s, %u 键)\n",
             use_gb ? "GB/GBC 版 AB v2 对角" : (use_alt ? "GBA/AB 机版" : "SNES 版"),
             (app && app->configNs) ? app->configNs : "", (unsigned)cnt);
-    /* 设备"可产键"掩码同步到当前表（|= 单调并入）：init 时锁到的是备表（11 键，无 X/Y），
-     * 若之后切到 SNES 主表而掩码不更新，SNES 的 X/Y 会被当成"本机没有"而吞掉。 */
-    UPDATE_GLOBAL_MAP(keymap_touch);
-#else
+    return true;
+}
+#else   /* 上游原码逐字不变（Tab5 等：装过即早返回，路径与位移零变化） */
+static void touch_keymap_ensure(void)
+{
     if (keymap_touch_count)
         return;
     const bool use_alt = RG_TOUCH_KEYMAP_USE_ALT();
     const rg_keymap_touch_t *src = use_alt ? keymap_touch_alt : keymap_touch_main;
     keymap_touch_count = use_alt ? RG_COUNT(keymap_touch_alt) : RG_COUNT(keymap_touch_main);
     memcpy(keymap_touch, src, keymap_touch_count * sizeof(rg_keymap_touch_t));
-#endif
 }
+#endif
 #else
 static rg_keymap_touch_t keymap_touch[] = RG_GAMEPAD_TOUCH_MAP;
 static const size_t keymap_touch_count = RG_COUNT(keymap_touch);
-#define touch_keymap_ensure()  do {} while (0)   /* 单表目标：无表可装 */
+#define touch_keymap_ensure()  ((bool)0)   /* 单表目标：无表可装（返回值语义同上） */
 #endif
 
 /* 虚拟按键隐藏时的恢复入口 = 左上角那个可见的开关（几何由可视层提供：
@@ -757,7 +760,7 @@ static bool dpad_was_diag;          /* 上一轮是否斜向（滞回状态） *
 
 static void rg_dpad_geom_update(void)
 {
-    touch_keymap_ensure();
+    (void)touch_keymap_ensure();
     const rg_keymap_touch_t *up = NULL, *down = NULL, *left = NULL, *right = NULL;
     for (size_t i = 0; i < keymap_touch_count; ++i)
     {
@@ -1452,7 +1455,7 @@ void rg_input_init(void)
     /* 只登记"这些虚拟按键存在"，真正的触摸 IC 创建推迟到第一次读手柄时（懒加载）：
      * 此刻 TP_RST 还没释放（扩展器在显示初始化里才初始化），现在创建必然失败。 */
     RG_LOGI("Virtual touch gamepad registered (ST7123 @0x55, lazy init).\n");
-    touch_keymap_ensure();
+    (void)touch_keymap_ensure();
     UPDATE_GLOBAL_MAP(keymap_touch);
 #endif
 #if defined(RG_GAMEPAD_TOUCH_MAP) && defined(ESP_PLATFORM)
@@ -1526,7 +1529,12 @@ uint32_t rg_input_read_gamepad(void)
 {
     /* 每帧入口挂钩：机型表可能变（claw4：GB/GBC 用 AB v2 表；核心 configNs 是 init 之后才写入的）。
      * 单表目标是空宏；Tab5 走 #else 原码（装过即早返回）⇒ 行为与位移都不变。 */
-    touch_keymap_ensure();
+#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+    if (touch_keymap_ensure())   /* claw4：换了表就同步"设备可产键"掩码（宏定义在本文件后半，故在调用点用） */
+        UPDATE_GLOBAL_MAP(keymap_touch);
+#else
+    touch_keymap_ensure();       /* 上游原码形态（void，装过即早返回） */
+#endif
 #ifdef RG_TARGET_SDL2
     /* macOS：只有主线程能泵 Cocoa 事件（子线程会触发 NSApplication 异常 → abort） */
     if (rg_sdl2_can_pump_events())
