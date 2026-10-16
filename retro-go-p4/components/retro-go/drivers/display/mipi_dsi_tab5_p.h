@@ -29,6 +29,7 @@
  *    DSI 面板要小端，所以逐像素换回。
  * ==========================================================================*/
 
+#include "port/display.h"        /* 板级显示驱动契约（8 个 lcd_* 原型）：少一个 / 签名不符 ⇒ 编译期报错 */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

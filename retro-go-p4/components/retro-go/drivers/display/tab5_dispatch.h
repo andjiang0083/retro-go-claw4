@@ -12,6 +12,7 @@
  * 双 app 形态（RG_SINGLE_APP=0）下 rg_orient_active() 返回**运行分区标签**，
  * 于是分发结果与改造前逐字一致 —— 这条路径必须零回归（真机对照 r3/r4 基线验证）。
  */
+#include "port/display.h"        /* 板级显示驱动契约（本文件实现全部 8 个 lcd_* 转发器） */
 #include <stddef.h>
 #include <stdint.h>
 #include "rg_orient.h"
