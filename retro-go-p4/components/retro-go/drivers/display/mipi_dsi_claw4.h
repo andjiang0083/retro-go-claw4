@@ -725,8 +725,48 @@ static void claw4_test_boot_task(void *arg)
 
 
 
+/* ══════════ 【诊断件·轻量】启动阶段堆健康检查站 C0–C3（2026-10-16）══════════════
+ * 背景：单 app 形态真机取证到"开机约 5s、用户还没碰任何东西，INTERNAL 堆元数据就已写坏"
+ *   （当时那版带投毒+追踪，随后把机器拖进 Interrupt WDT 循环 ⇒ 那套取证手段判废）。
+ * 本检查站 = **纯构建 + 只走一次**：不投毒、不追踪、不周期扫描，只在 4 个时间点各查一遍
+ *   （print_errors=false，开销可忽略），用来判定写坏发生在哪个初始化阶段：
+ *     C0 = C 运行时构造器（早于 app_main / 所有 rg_* 初始化）
+ *     C1 = lcd_init 入口（SD/输入/触摸已初始化完）
+ *     C2 = lcd_init 结束（显示通路 + 首帧已跑）
+ *     C3 = 稳定态（开机 +20s）
+ * 判读：坏在 C0/C1 ⇒ 共享初始化路径（与 GB 核无关，谁都得修）；C2 才坏 ⇒ 显示驱动；
+ *       全 OK ⇒ 雷在"用户交互路径"（触摸/菜单/游戏启动），再往下按子系统二分。
+ * ⚠ 一次性诊断件，定罪后撤（连同 CLAW4_HEAPPROBE 宏）。 */
+#define CLAW4_HEAPPROBE 1
+#if CLAW4_HEAPPROBE
+static void claw4_heapprobe(const char *tag)
+{
+    bool ok_int = heap_caps_check_integrity(MALLOC_CAP_INTERNAL, false);
+    bool ok_ext = heap_caps_check_integrity(MALLOC_CAP_SPIRAM, false);
+    RG_LOGW("heapprobe[%s] INTERNAL=%s(free=%u) SPIRAM=%s(free=%u)\n", tag,
+            ok_int ? "OK" : "★BAD", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            ok_ext ? "OK" : "★BAD", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+__attribute__((constructor)) static void claw4_heapprobe_ctor(void) { claw4_heapprobe("C0/ctor"); }
+static void claw4_heapprobe_c3_cb(void *arg) { (void)arg; claw4_heapprobe("C3/开机+20s"); }
+static void claw4_heapprobe_c3_arm(void)
+{
+    static bool armed;
+    if (armed)
+        return;
+    armed = true;
+    const esp_timer_create_args_t targs = {.callback = claw4_heapprobe_c3_cb, .name = "hbprobe"};
+    esp_timer_handle_t h = NULL;
+    if (esp_timer_create(&targs, &h) == ESP_OK)
+        esp_timer_start_once(h, 20ULL * 1000 * 1000);
+}
+#endif /* CLAW4_HEAPPROBE */
+
 static void lcd_init(void)
 {
+#if CLAW4_HEAPPROBE
+    claw4_heapprobe("C1/lcd_init入口");
+#endif
     claw4_backlight_init();
     lcd_set_backlight(0);            /* 明确先灭（init 期间不闪） */
 
@@ -863,6 +903,10 @@ static void lcd_init(void)
     RG_LOGI("claw4: DSI ready — NV3051F %dx%d, %d lanes @%dMbps, DPI %dMHz, RGB888, fb=%p\n",
             CLAW4_PHYS_W, CLAW4_PHYS_H, CLAW4_DSI_LANES, CLAW4_DSI_LANE_MBPS,
             CLAW4_DPI_CLK_MHZ, (void *)claw4_fb);
+#if CLAW4_HEAPPROBE
+    claw4_heapprobe("C2/display就绪");
+    claw4_heapprobe_c3_arm();
+#endif
 }
 
 static void lcd_deinit(void)
