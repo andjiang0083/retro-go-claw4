@@ -412,6 +412,9 @@ void gui_redraw(void)
 
 void gui_draw_preview(tab_t *tab)
 {
+#ifdef RG_SURF_LIFE_PROBE
+    RG_LOGW("draw-prev : %p %dx%d\n", (void *)tab->preview, tab->preview->width, tab->preview->height);
+#endif
     if (tab->preview)
     {
         int height = RG_MIN(tab->preview->height, PREVIEW_HEIGHT);
@@ -451,7 +454,14 @@ void gui_draw_background(tab_t *tab, int shade)
         rg_image_t *img = tab->background;
         for (int y = 0; y < img->height; ++y)
         {
-            uint16_t *line = img->data + y * img->stride;
+            /* ★ 修复堆被写穿（2026-10-16 真机定位）：img->stride 是**字节**（rg_surface.c:
+             *   stride = width * pixel_size），而 line 是 uint16_t*。原来的
+             *   `img->data + y * img->stride` 每个元素 2 字节 ⇒ 行偏移翻倍，每画一次
+             *   （对话框 shade>0）就把背景缓冲**往缓冲外多写一倍**（720x480 图 ≈ 690KB 越界），
+             *   砸坏相邻堆块 ⇒ 之后任意 malloc 崩（tlsf align_up / remove_free_block），
+             *   随堆布局间歇出现 —— 用户报的"进 launcher 菜单/选项就崩、反反复复"就是这个。
+             *   正解：按字节推进再转 uint16_t*。 */
+            uint16_t *line = (uint16_t *)((uint8_t *)img->data + (size_t)y * (size_t)img->stride);
             for (int x = 0; x < img->width; ++x)
             {
                 int pixel = line[x];
@@ -464,6 +474,11 @@ void gui_draw_background(tab_t *tab, int shade)
         tab->background_shade = shade;
     }
 
+#ifdef RG_SURF_LIFE_PROBE
+    RG_LOGW("draw-bg   : %p %dx%d (tab=%s shade=%d bg_shade=%d)\n", (void *)tab->background,
+            tab->background ? tab->background->width : -1, tab->background ? tab->background->height : -1,
+            tab->name ? tab->name : "-", shade, tab->background_shade);
+#endif
     if (tab->background)
         rg_gui_draw_image(0, 0, gui.width, gui.height, false, tab->background);
     else

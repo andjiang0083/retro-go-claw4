@@ -983,6 +983,47 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
 
     // We create a copy of options because the callbacks might modify it (ie option->value)
     rg_gui_option_t options[options_count + 1];
+#ifdef RG_GUI_OPTION_VALUE_CAP   /* 能力宏（claw4 定义 64）：槽容量显式，防回调写穿；不定义 = 上游原码 */
+    /* ★ claw4 选项对话框堆越界根治（2026-10-14/15，2026-10-16 因回滚丢失后重新捞回）：
+     * option->value 是指针，回调（launcher/核心几十处）全部用裸 strcpy/sprintf
+     * 往里写、零容量检查——上游隐形契约是"每槽32字节"。中文 UTF-8 值（模式名、
+     * "显示/隐藏"等）+ update_cb 换串极易超过32 ⇒ strcpy 写穿槽尾、砸坏相邻
+     * TLSF 块头 ⇒ "打开选项菜单/调音量→稍后 malloc 崩"（受害者遍布各任务；
+     * 真机 2026-10-16 复现：GBC 里 menu→选项→音量→调节→B ⇒ abort）。
+     * 修复：①槽容量显式提到 RG_OPTION_VALUE_CAP=64（够任何回调串）；
+     *       ②初始拷贝显式钳位 ≤CAP-1，双保险；③推进与预留同一公式（固定步长）。
+     * ⚠ 共享文件铁律：非 claw4 目标（tab5…）走下面的 #else = 上游原码，零位移。 */
+    enum { RG_OPTION_VALUE_CAP = RG_GUI_OPTION_VALUE_CAP };
+    size_t text_need = 16;   // 裕量，避免 0 长 calloc
+    for (size_t i = 0; i < options_count; ++i)
+        if (options_const[i].value)
+            text_need += RG_OPTION_VALUE_CAP;   // 每槽固定 CAP，回调可自由换串
+    char *text_buffer = calloc(text_need, 1);
+    char *text_buffer_ptr = text_buffer;
+
+    memcpy(options, options_const, sizeof(options));
+
+    for (size_t i = 0; i < options_count; i++)
+    {
+        rg_gui_option_t *option = &options[i];
+        if (!option->label)
+            option->label = "";
+        if (option->value && text_buffer)
+        {
+            // 钳位拷贝：绝不让初始串越过本槽 CAP 边界
+            size_t len = strlen(option->value);
+            if (len > RG_OPTION_VALUE_CAP - 1)
+                len = RG_OPTION_VALUE_CAP - 1;
+            memcpy(text_buffer_ptr, option->value, len);
+            text_buffer_ptr[len] = '\0';
+            option->value = text_buffer_ptr;
+        }
+        if (option->update_cb)
+            option->update_cb(option, RG_DIALOG_INIT);
+        if (option->value && text_buffer)
+            text_buffer_ptr += RG_OPTION_VALUE_CAP;   // 固定步长=预留公式，永不漂
+    }
+#else
     char *text_buffer = calloc(options_count, 32);
     char *text_buffer_ptr = text_buffer;
 
@@ -1000,6 +1041,7 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
         if (option->value && text_buffer)
             text_buffer_ptr += RG_MAX(strlen(option->value), 31) + 1;
     }
+#endif
 
     rg_gui_draw_status_bars();
     rg_gui_draw_dialog(title, options, sel);
@@ -1069,6 +1111,13 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
                 if (sel >= options_count)
                     sel = 0;
             }
+#ifdef RG_GUI_DIALOG_PROBE
+            /* 临时探针（claw4）：把"光标停在哪一项"变成机读，用来盲开菜单的自动化。
+             * 只在 claw4 编译；Tab5 预处理输出零位移。验完撤。 */
+            RG_LOGW("dlgprobe: \"%s\" sel=%d/%u joy=0x%x -> \"%s\"\n",
+                    title, (int)sel, (unsigned)options_count, (unsigned)joystick,
+                    options[sel].label ? options[sel].label : "(null)");
+#endif
             if (sel_old != -1 && options[sel_old].update_cb)
                 options[sel_old].update_cb(&options[sel_old], RG_DIALOG_FOCUS_LOST);
             if (options[sel].update_cb)

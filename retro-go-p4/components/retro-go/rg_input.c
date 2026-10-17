@@ -901,6 +901,34 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
 #if RG_INPUT_LAT_DIAG
         ilat_add(&ilat_read, (uint32_t)(rg_system_timer() - ilat_t0));
 #endif
+#if defined(RG_TEST_TOUCHSEQ_STEPS_ON) && (RG_TEST_TOUCHSEQ_STEPS_ON > 0)
+            {   /* 触摸脚本：按时间线把"手指"放到指定坐标（物理坐标，与驱动同一口径） */
+                typedef struct { int32_t at_ms; int32_t x; int32_t y; int32_t hold_ms; } rg_touchseq_step_t;
+                static const rg_touchseq_step_t tseq[] = RG_TEST_TOUCHSEQ_STEPS;
+                static const size_t tseq_n = sizeof(tseq) / sizeof(tseq[0]);
+                static size_t tsi = 0;
+                static int64_t tseq_t0 = 0, tseq_until = 0;
+                const int64_t tnow = rg_system_timer();
+                if (tseq_t0 == 0) tseq_t0 = tnow;
+                const int64_t tms = (tnow - tseq_t0) / 1000;
+                if (tsi < tseq_n && tms >= tseq[tsi].at_ms)
+                {
+                    tseq_until = tnow + (int64_t)tseq[tsi].hold_ms * 1000;
+                    RG_LOGW("touchseq: 注入触点 (%d,%d) t=%dms 按住 %dms\n",
+                            (int)tseq[tsi].x, (int)tseq[tsi].y, (int)tms, (int)tseq[tsi].hold_ms);
+                    tsi++;
+                }
+                if (tsi > 0 && tnow < tseq_until)
+                {
+                    count = 1;
+                    px[0] = (uint16_t)tseq[tsi - 1].x;
+                    py[0] = (uint16_t)tseq[tsi - 1].y;
+                    any_touch = true;
+                    ilat_got_xy = true;   /* 让后面的坐标映射与键盘层照常跑（仿真手指） */
+                }
+            }
+#endif
+
         if (ilat_got_xy)
         {
             any_touch = (count > 0);
@@ -1398,6 +1426,20 @@ void rg_input_deinit(void)
 #ifndef RG_TEST_AUTOPRESS_MENU2_AT_MS
 #define RG_TEST_AUTOPRESS_MENU2_AT_MS 0  /* >0：再合成一次 MENU（关菜单）——判据看之后 FPS 是否恢复 */
 #endif
+/* ── 测量钩子：按键**脚本**（默认关）──────────────────────────
+ * 用途：菜单类 bug（选项对话框堆越界、调音量后崩）只有"按对顺序"才复现，单个 A/MENU 按键
+ * 复现不了。这里给一张 {时刻ms, 键, 按住ms} 的表，按时间线逐个注入，就能让设备自己走完
+ * 「menu→选项→音量→调节→B」这种路径。默认空表 ⇒ 对 Tab5 与正常构建零影响。 */
+#ifndef RG_TEST_AUTOSEQ_STEPS
+#define RG_TEST_AUTOSEQ_STEPS { {0, 0, 0} }   /* 占位：at_ms=0 不注入任何键 */
+#endif
+/* ── 测量钩子：**触摸**脚本（默认关）──────────────────────────
+ * 为什么必须有：只注入虚拟**按键**复现不了触摸相关的 bug（手指路径里有按键路径没有的东西：
+ * 触点映射、方向键矢量判定、按下高亮、振动马达 esp_timer）。真机实测：同一段菜单操作，
+ * 按键注入干净、手指点就崩 —— 缺的就是这一条。表项 = {时刻ms, 物理x, 物理y, 按住ms}。 */
+#ifndef RG_TEST_TOUCHSEQ_STEPS
+#define RG_TEST_TOUCHSEQ_STEPS { {0, 0, 0, 0} }   /* 占位：at_ms=0 不注入 */
+#endif
 
 uint32_t rg_input_read_gamepad(void)
 {
@@ -1423,6 +1465,27 @@ uint32_t rg_input_read_gamepad(void)
             if (event.type == SDL_QUIT)
                 exit(0);
         }
+    }
+#endif
+#if defined(RG_TEST_AUTOSEQ_STEPS) && (RG_TEST_AUTOSEQ_STEPS_ON > 0)
+    {
+        typedef struct { int32_t at_ms; uint32_t key; int32_t hold_ms; } rg_autoseq_step_t;
+        static const rg_autoseq_step_t seq[] = RG_TEST_AUTOSEQ_STEPS;
+        static const size_t seq_n = sizeof(seq) / sizeof(seq[0]);
+        static size_t seq_i = 0;
+        static int64_t seq_t0 = 0, seq_until = 0;
+        const int64_t now_us = rg_system_timer();
+        if (seq_t0 == 0) seq_t0 = now_us;
+        const int64_t ms = (now_us - seq_t0) / 1000;
+        if (seq_i < seq_n && ms >= seq[seq_i].at_ms && seq[seq_i].key)
+        {
+            seq_until = now_us + (int64_t)seq[seq_i].hold_ms * 1000;
+            RG_LOGW("autoseq: 注入 key=0x%x (t=%dms, 按住 %dms)\n",
+                    (unsigned)seq[seq_i].key, (int)ms, (int)seq[seq_i].hold_ms);
+            seq_i++;
+        }
+        if (seq_i > 0 && now_us < seq_until)
+            return gamepad_state | seq[seq_i - 1].key;
     }
 #endif
 #if (RG_TEST_AUTOPRESS_A_MS > 0) || (RG_TEST_AUTOPRESS_MENU_AT_MS > 0) || (RG_TEST_AUTOPRESS_MENU2_AT_MS > 0)

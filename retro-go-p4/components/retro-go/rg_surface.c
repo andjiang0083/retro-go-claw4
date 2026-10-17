@@ -49,6 +49,9 @@ static bool create_window(const rg_surface_t *parent, const rg_rect_t *rect, rg_
 
 rg_surface_t *rg_surface_create(int width, int height, int format, uint32_t alloc_flags)
 {
+#ifdef RG_SURF_LIFE_PROBE
+    RG_LOGW("surf-alloc: %dx%d fmt=%d\n", width, height, format);
+#endif
     size_t pixel_size = RG_PIXEL_GET_SIZE(format);
     size_t data_size = height * width * pixel_size;
     size_t palette_size = (format & RG_PIXEL_PALETTE) ? (256 * (format == RG_PIXEL_PAL888 ? 3 : 2)) : 0;
@@ -76,6 +79,11 @@ void rg_surface_free(rg_surface_t *surface)
 {
     if (!surface)
         return;
+#ifdef RG_SURF_LIFE_PROBE
+    /* 临时探针（claw4）：surface 生命周期机读 —— 找出"释放后仍被使用"的那一个 */
+    RG_LOGW("surf-free : %p %dx%d fmt=%d data=%p\n", (void *)surface, surface->width, surface->height,
+            surface->format, surface->data);
+#endif
     if (surface->free_data)
         free(surface->data);
     if (surface->free_palette)
