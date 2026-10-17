@@ -286,6 +286,9 @@
  * 跟着做"零位移证明"。实现见 targets/claw4/touch_keymap.h。 */
 #define RG_TOUCH_KEYMAP_TABLE_EXTRA  RG_GAMEPAD_TOUCH_MAP_GB
 #define RG_TOUCH_KEYMAP_BOARD_HOOK   "targets/claw4/touch_keymap.h"
+/* RG_TOUCH_IC_BOARD_HOOK：板级"触摸 IC 初始化"实现（claw4 = GT911；
+ * 共享文件默认走内置的 ST7123 一体屏实现）。P3-b 迁出。 */
+#define RG_TOUCH_IC_BOARD_HOOK       "targets/claw4/touch_ic.h"
 /* 两张表**条数不等**（SNES 13 / GBA 11）—— 它们是两种机型布局，不是两个方向；
  * 共享代码里那条"两张表条数必须一致"的静态断言对本机不成立，显式放行。 */
 #define RG_TOUCH_KEYMAP_ALLOW_DIFFERENT_COUNTS 1

@@ -47,10 +47,6 @@ static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
 #endif
 #ifdef ESP_PLATFORM
 #include "esp_lcd_touch.h"
-#if defined(RG_TARGET_CLAW4)
-#include "esp_lcd_touch_gt911.h"      /* claw4 的触摸 IC = GT911（厂商面板同款） */
-#include "driver/i2c_master.h"        /* 复用显示驱动建好的 I2C 总线（TCA9555 同一条） */
-#endif
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch_st7123.h"
 #endif
@@ -175,69 +171,10 @@ static void rg_vibrate_pulse(void)
 static void rg_vibrate_pulse(void) {}
 #endif
 
-#if defined(RG_TARGET_CLAW4)
-/* Metalio Claw4 的触摸 IC = **GT911**。参数照官方板级源码
- * （official/main/boards/metalio-claw-4/metalio-claw-4.cc → InitializeTouch）：
- *   · I2C 地址先探测 0x5D，失败再试 0x14；
- *   · 不接 RST（GPIO_NUM_NC）；INT = GPIO33，**低有效**；
- *   · 200kHz（与电量计 BQ27220 同总线；官方注释：400k 在总线抖动时更容易 clear-bus 失败）；
- *   · x_max/y_max = 720（方屏）。
- * ⚠ I2C 控制器**复用显示驱动建好的那条**（claw4_get_i2c_bus）—— 官方板级注释：
- *   两个 I2C 外设会抢总线，GT911 与 TCA9555 会一起通信失败。 */
-extern i2c_master_bus_handle_t claw4_get_i2c_bus(void);
-static esp_err_t rg_touch_init(void)
-{
-    i2c_master_bus_handle_t bus = claw4_get_i2c_bus();
-    if (!bus)
-        return ESP_ERR_INVALID_STATE;
-
-    uint8_t dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
-    if (i2c_master_probe(bus, dev_addr, 100) != ESP_OK)
-    {
-        if (i2c_master_probe(bus, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, 100) == ESP_OK)
-        {
-            dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
-            RG_LOGI("claw4: GT911 在备用地址 0x%02X\n", dev_addr);
-        }
-        else
-        {
-            RG_LOGW("claw4: GT911 无应答（0x%02X/0x%02X），触摸不可用\n",
-                    ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP);
-            return ESP_ERR_NOT_FOUND;
-        }
-    }
-
-    esp_lcd_panel_io_handle_t io = NULL;
-    esp_lcd_panel_io_i2c_config_t io_config = {
-        .dev_addr = dev_addr,
-        .control_phase_bytes = 1,
-        .dc_bit_offset = 0,
-        .lcd_cmd_bits = 16,
-        .flags = {.disable_control_phase = 1},
-    };
-    io_config.scl_speed_hz = 200000;
-    esp_err_t err = esp_lcd_new_panel_io_i2c_v2(bus, &io_config, &io);
-    if (err != ESP_OK)
-        return err;
-
-    const esp_lcd_touch_config_t tp_config = {
-        .x_max = RG_TOUCH_PHYS_W,
-        .y_max = RG_TOUCH_PHYS_H,
-        .rst_gpio_num = -1,          /* 板上未接 */
-        .int_gpio_num = 33,
-        .levels = { .reset = 0, .interrupt = 0 },   /* INT 低有效 */
-        .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
-    };
-    err = esp_lcd_touch_new_i2c_gt911(io, &tp_config, &touch_handle);
-    if (err != ESP_OK || touch_handle == NULL)
-    {
-        esp_lcd_panel_io_del(io);
-        touch_handle = NULL;
-        return err != ESP_OK ? err : ESP_FAIL;
-    }
-    RG_LOGI("claw4: GT911 就绪 @0x%02X (INT 33, 200kHz)\n", dev_addr);
-    return ESP_OK;
-}
+#ifdef RG_TOUCH_IC_BOARD_HOOK
+/* 板级触摸 IC 初始化（claw4 = GT911，见 targets/claw4/touch_ic.h）。
+ * 默认不定义 ⇒ 走下面 #else 的内置实现（Tab5 = ST7123 一体屏）。 */
+#include RG_TOUCH_IC_BOARD_HOOK
 #else
 /* ── Tab5：ST7123（一体化屏的触摸 IC）────────────────────────────────────── */
 static esp_err_t rg_touch_init(void)
@@ -281,7 +218,7 @@ static esp_err_t rg_touch_init(void)
     }
     return ESP_OK;
 }
-#endif /* RG_TARGET_CLAW4 */
+#endif /* RG_TOUCH_IC_BOARD_HOOK */
 
 /* 触摸懒加载 + 重试：
  * Tab5 的 TP_RST 由 I2C 上的 IO 扩展器控制，而扩展器是在**显示初始化**里才被初始化的
@@ -430,7 +367,7 @@ static void ilat_note_frame(uint32_t visible)
 }
 static void ilat_bus_probe(void)
 {
-#if !defined(RG_TARGET_CLAW4) && defined(RG_GAMEPAD_TOUCH_MAP)
+#if !defined(RG_TOUCH_IC_BOARD_HOOK) && defined(RG_GAMEPAD_TOUCH_MAP)   /* 内置触摸 IC 的机种（Tab5 等）*/
     if (!touch_handle || !touch_handle->io)
         return;
     esp_lcd_panel_io_handle_t io = touch_handle->io;
@@ -1026,20 +963,6 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
             if (!dpad_touched)
                 rg_dpad_reset();
 
-#if defined(RG_TARGET_CLAW4)
-            /* ⚠ 临时探针（P2 幽灵触点定位用，定位完删）：看 GT911 到底报了什么点、
-             * 又映射成了哪些键。限速 2 次/秒，只在"有触点上报"的拍子打。 */
-            {
-                static int64_t probe_last = 0;
-                const int64_t now_us = esp_timer_get_time();
-                if (now_us - probe_last > 500000)
-                {
-                    probe_last = now_us;
-                    RG_LOGI("claw4-probe: count=%u px0=%d py0=%d state=0x%08x\n",
-                            (unsigned)count, (int)px[0], (int)py[0], (unsigned)state);
-                }
-            }
-#endif
 
 #if RG_TOUCH_OVERLAY
             /* ── X/Y ↔ L/R 调换按钮（L/R 中间那颗）─────────────────────────────
