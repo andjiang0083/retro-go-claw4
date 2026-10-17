@@ -4,4 +4,3 @@
 config.h|cond|2|
 rg_audio.c|sym|9|
 rg_display.c|sym|1|
-rg_touch_overlay.c|cond|6|

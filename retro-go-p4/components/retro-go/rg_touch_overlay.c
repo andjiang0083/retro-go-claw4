@@ -166,9 +166,9 @@ static void rg_overlay_sync_viewport(void)
 
 static rg_overlay_btn_t *btns;
 static size_t btn_count;
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-/* claw4：已建"画出来的按键"对应的键位表代际号（init 与重建处都更新）。
- * 守卫内声明 ⇒ Tab5 预处理输出零位移。 */
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
+/* 板级多表选表：已建"画出来的按键"对应的键位表代际号（init 与重建处都更新）。
+ * 守卫内声明 ⇒ 无此能力的 target 预处理输出零位移。 */
 static uint32_t btns_built_gen;
 #endif
 static bool ready;
@@ -682,8 +682,8 @@ void rg_overlay_init(void)
 
     load_glyphs();
 
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-    /* claw4：留满上限 ⇒ 换键位表时可就地重建精灵，不会越界（Tab5 走下面的上游原码） */
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
+    /* 板级多表选表：留满上限 ⇒ 换键位表时可就地重建精灵，不会越界（无此能力的 target 走下面上游原码） */
     btns = rg_alloc(sizeof(rg_overlay_btn_t) * RG_OVERLAY_MAX_BUTTONS, MEM_SLOW);
 #else
     btns = rg_alloc(sizeof(rg_overlay_btn_t) * n, MEM_SLOW);
@@ -791,7 +791,7 @@ void rg_overlay_init(void)
     RG_LOGI("touch overlay ready: %u buttons, visible=%d, alpha=%d%%, X/Y<->L/R swapped=%d, skin=%s, built in %d ms\n",
             (unsigned)btn_count, visible, alpha_pct, swap_yx, rg_touch_skin_short_name(skin_idx),
             (int)((rg_system_timer() - t_start) / 1000));
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
     {   /* claw4 取证：init 这一刻"画出来"的按键坐标。若与 ovl-relayout 那行不同，
          *   说明换表前的画面是旧表（用户真机症状的机读证据）。 */
         char dump[288]; int off = 0; dump[0] = 0;
@@ -870,14 +870,14 @@ static int panel_vp_x = -1, panel_vp_w = -1, panel_vp_top = -1;
  * 定义在**文件顶部**（见 rg_overlay_sync_viewport 附近）：布局自检那个更早的函数也要用它，
  * 放这里会"未声明先用"。 */
 
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
-/* claw4：键位表换代 ⇒ 重建"画出来的按键"（定义在下方，这里前置声明） */
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
+/* 板级多表选表：键位表换代 ⇒ 重建"画出来的按键"（定义在下方，这里前置声明） */
 static void overlay_relayout_if_keymap_changed(void);
 #endif
 
 static void rg_overlay_try_panel(void)
 {
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
     /* 先补建按键精灵：输入层每帧可能已换表，可视层不跟就会"画旧表、点新表" */
     overlay_relayout_if_keymap_changed();
     if (!btns)
@@ -932,13 +932,13 @@ static void rg_overlay_try_panel(void)
             rg_display_get_width(), rg_display_get_height());
 }
 
-#ifdef RG_GAMEPAD_TOUCH_MAP_GB
+#ifdef RG_TOUCH_KEYMAP_BOARD_HOOK   /* 板级多表选表（claw4）⇒ 可视层要跟着键位代际号重建 */
 /* ── claw4：键位表换代 → 重建按键精灵（2026-10-16 真机根因修复）─────────────────
  * btns[] 里的精灵（位置 + 标签 + 配色，全是 4x4 超采样预渲染）只在 rg_overlay_init
  * 建一次；而选表在输入层是**每帧重算**。两者错开的症状：画面上的 A/B 还在旧表位置，
  * 但旧位置其实已经打不到东西（命中层读的是新表）——用户真机看到的就是这个。
  * 判据 = rg_input 的表代际号；换了就整批重建 + 面板底图（按机型生成的铭牌/点缀色）重装。
- * 整块在 claw4 守卫内 ⇒ Tab5 预处理输出零位移（铁律）。 */
+ * 整块在能力宏守卫内 ⇒ 无此能力的 target 预处理输出零位移（铁律）。 */
 static void overlay_relayout_if_keymap_changed(void)
 {
     if (!ready || !btns)
