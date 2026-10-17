@@ -1,11 +1,12 @@
 # .github/workflows/build-claw4.yml — Claw4(方屏 720×720) 构建回归门禁
 #
-# 为什么单独一条：main 的 build.yml 守的是 tab5，**不能直接搬过来用**——
-#   - `branches: [main]`：搬到 claw4 上根本不会触发；
+# 为什么单独一条（**不能直接并进 build.yml**）：
 #   - 锚点不同：tab5 查 E9/AA50/ABCD5432+≥512KB，claw4 查 **三点 flash-size nibble**；
-#   - target/产物名不同：tab5 → retro-go_*_tab5.img，claw4 → retro-go_*_claw4.img。
-# 本文件只加不改：main 的 build.yml 与主干内容零触碰（两线无共同祖先，反向合并会连
-# CI/社区文档一起删掉，见 claw4 收口记录）。
+#   - target/产物名不同：tab5 → retro-go_*_tab5.img，claw4 → retro-go_*_claw4.img；
+#   - 构建形态不同：claw4 CI 形态是 **3 app**（launcher + retro-core + gbsp）。
+# ★ 触发分支 = main（2026-10-17 单主干化后修正）：原来写的是 `branches: [claw4]`，
+#   那条分支在单主干合并后已退役 ⇒ **claw4 的门禁在 main 上根本不会跑**（本仓真实洞，
+#   当天发现并修掉；修之前 claw4 只有"本地记得手动跑"这一层保护）。
 #
 # 职责（只有这三件）：
 #   1) 干净克隆 + claw4 全量构建能成功（--no-networking：P4 无射频，增量会掩盖配置错）
@@ -30,9 +31,9 @@ name: build-claw4
 
 on:
   push:
-    branches: [claw4]
+    branches: [main]
   pull_request:
-    branches: [claw4]
+    branches: [main]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -56,6 +57,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ── 架构门禁（不依赖 ESP-IDF，秒级）────────────────────────────────
+      # 放在装 IDF **之前**：违例秒级红，不烧 CI 分钟，也不会被"构建失败先把人引开"。
+      # 两个脚本各自带负例验证（塞板名/改名 ⇒ 必红），见 tools/ 下脚本头注释。
+      - name: Architecture gates (board isolation + display contract)
+        run: |
+          set -euo pipefail
+          python3 tools/check-board-isolation.py
+          python3 tools/check-display-contract.py
 
       - name: Install ESP-IDF ${{ env.IDF_VERSION }}
         uses: espressif/install-esp-idf-action@v1
