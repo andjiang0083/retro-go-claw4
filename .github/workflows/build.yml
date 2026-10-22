@@ -23,12 +23,12 @@
 
 name: build-tab5
 
+# ★ 本仓（Claw4 冻结分叉）改动 2026-10-22：本 workflow 只保留**手动触发**。
+#   原因：它是 **Tab5** 的构建门禁（双 app + 单 app 两种形态），而本仓实际维护的是 Claw4 ——
+#   自动跑了只会给"和本仓无关的绿"并白烧 CI 分钟。Claw4 的自动门禁是
+#   .github/workflows/build-claw4.yml（3 app 形态 + flash-size nibble 锚点）。
+#   需要验证这份快照的 Tab5 形态时，Actions 页面点 "Run workflow" 即可。
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 concurrency:
