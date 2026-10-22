@@ -1,5 +1,16 @@
 # retro-go-tab5
 
+> **This repository is the Metalio Claw4 fork of [retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5).**
+> It was split out on 2026-10-22 from `retro-go-tab5@c662d7e` (= Tab5 v0.4.10 line) and is a **frozen fork**:
+> it does not track upstream, and future Tab5 improvements reach it only by explicit cherry-pick.
+> The Tab5 repository now maintains the Tab5 board only.
+>
+> **本仓是 [retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) 的 Metalio Claw4 分叉。**
+> 2026-10-22 从 `retro-go-tab5@c662d7e`（Tab5 v0.4.10 线）切出，属**冻结分叉**：不跟进上游，
+> 上游将来若要给它改动只能显式 cherry-pick。Tab5 主仓现在只管 Tab5 一块板。
+
+
+
 **English** · [中文](README_CN.md)
 
 **The first full-speed GBA emulator for the M5Stack Tab5 (ESP32-P4) — GBA at a solid 60 FPS with a RISC-V dynamic recompiler, plus the other 10 retro-go systems in the same firmware: GB · GBC · NES · SNES · SMS · Game Gear · ColecoVision · PC Engine · Lynx · Game & Watch.**

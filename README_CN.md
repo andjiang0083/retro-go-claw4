@@ -1,5 +1,9 @@
 # retro-go-tab5
 
+> **本仓是 [retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) 的 Metalio Claw4 分叉（冻结）。**
+> 2026-10-22 从 `retro-go-tab5@c662d7e`（Tab5 v0.4.10 线）切出，不跟进上游；Tab5 主仓现在只管 Tab5 一块板。
+
+
 [English](README.md) · **中文**
 
 **Tab5 上首个满帧 GBA 模拟器（ESP32-P4）—— RISC-V 动态重编译，稳稳跑满 60 FPS；同一个固件里还装着 retro-go 的其余 10 个机种：GB · GBC · NES · SNES · SMS · Game Gear · ColecoVision · PC Engine · Lynx · Game & Watch。**
